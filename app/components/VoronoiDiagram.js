@@ -21,8 +21,7 @@ const generateVoronoi = (sites, width, height) => {
 };
 
 const createCells = (sites, voronoi, delaunay) => {
-  // const colors = ['hsl(356, 89%, 65%)', 'hsl(34, 91%, 56%)', 'hsl(60, 89%, 71%)', 'hsl(300, 92%, 71%)', 'hsl(110, 91%, 66%)', 'hsl(232, 90%, 76%)']
-  const colors = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue']
+  const colors = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
   return sites.map((site, index) => ({
     id: index,
     site: site,
@@ -30,6 +29,33 @@ const createCells = (sites, voronoi, delaunay) => {
     color: colors[Math.floor(Math.random() * colors.length)],
     neighbors: Array.from(delaunay.neighbors(index)) || [], // Убедимся, что neighbors — это массив
   }));
+};
+
+const findSameColorNeighbors = (cellId, cells) => {
+  const visited = new Set();
+  const queue = [cellId];
+  const targetColor = cells[cellId].color;
+  const sameColorCells = [];
+
+  while (queue.length > 0) {
+    const currentCellId = queue.shift();
+
+    if (visited.has(currentCellId)) continue;
+    visited.add(currentCellId);
+
+    if (cells[currentCellId].color === targetColor) {
+      sameColorCells.push(currentCellId);
+
+      const neighbors = cells[currentCellId].neighbors;
+      for (const neighborId of neighbors) {
+        if (!visited.has(neighborId)) {
+          queue.push(neighborId);
+        }
+      }
+    }
+  }
+
+  return sameColorCells;
 };
 
 const VoronoiDiagram = ({ numPoints = 50 }) => {
@@ -41,30 +67,48 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
   const [selectedCell, setSelectedCell] = React.useState(null);
 
   const handleCellClick = (cell) => {
+    const sameColorCells = findSameColorNeighbors(cell.id, cells);
+    sameColorCells.forEach((cellId) => {
+      cells[cellId].color = "greenyellow";
+    });
     setSelectedCell(cell.id);
+  };
+
+  const handleCellHover = (cell) => {
+    const sameColorCells = findSameColorNeighbors(cell.id, cells);
+    sameColorCells.forEach((cellId) => {
+      cells[cellId].color = "orange";
+    });
+    setHoveredCell(cell);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoveredCell) {
+      const sameColorCells = findSameColorNeighbors(hoveredCell.id, cells);
+      sameColorCells.forEach((cellId) => {
+        cells[cellId].color = hoveredCell.color;
+      });
+    }
+    setHoveredCell(null);
   };
 
   return (
     <svg width={width} height={height}>
-    
       {cells.map((cell) => {
-        // Проверяем, выбрана ли ячейка или её соседи
         const isSelected =
           selectedCell !== null &&
           (cell.id === selectedCell || cells[selectedCell].neighbors.includes(cell.id));
 
-        // Проверяем, наведен ли курсор на ячейку или её соседей
         const isHovered =
-        hoveredCell &&
-        Array.isArray(hoveredCell.neighbors) &&
-        (cell.id === hoveredCell.id || // Ячейка, на которую наведен курсор
-          (hoveredCell.neighbors.includes(cell.id) && // Или соседняя ячейка
-            cell.color === hoveredCell.color)); // С таким же цветом
+          hoveredCell &&
+          Array.isArray(hoveredCell.neighbors) &&
+          (cell.id === hoveredCell.id || hoveredCell.neighbors.includes(cell.id));
 
-        // Определяем цвет ячейки
         const fillColor = isSelected ? "greenyellow" : isHovered ? "orange" : cell.color;
         const fillStroke = isSelected ? "red" : isHovered ? "lime" : "black";
-        const widthStroke = isSelected ? 2 : isHovered ? 2 : 1;
+        const widthStroke = isSelected ? 0 : isHovered ? 0 : 1;
+        const zIndex = isSelected ? 'z-10' : isHovered ? 'z-10' : 'z-1';
+
         return (
           <path
             key={cell.id}
@@ -73,10 +117,10 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
             filter={`url(#lightEffect${cell.id})`}
             stroke={fillStroke}
             strokeWidth={widthStroke}
-            onMouseEnter={() => setHoveredCell(cell)}
-            onMouseLeave={() => setHoveredCell(null)}
+            onMouseEnter={() => handleCellHover(cell)}
+            onMouseLeave={handleMouseLeave}
             onClick={() => handleCellClick(cell)}
-            
+            className={zIndex}
           />
         );
       })}
