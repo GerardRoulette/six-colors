@@ -27,41 +27,33 @@ const createCells = (sites, voronoi, delaunay) => {
     site: site,
     path: voronoi.renderCell(index),
     color: colors[Math.floor(Math.random() * colors.length)],
-    neighbors: Array.from(delaunay.neighbors(index)) || [], // Убедимся, что neighbors — это массив
+    neighbors: Array.from(delaunay.neighbors(index)) || [], // Ensure neighbors is an array
   }));
 };
 
-const findSameColorNeighbors = (cellId, cells) => {
-  const visited = new Set();
-  const queue = [cellId];
-  const targetColor = cells[cellId].color;
-  const sameColorCells = [];
+// Function to find the most left-down and most right-up cells using sorting
+const findBoundaryCells = (sites) => {
+  // Sort sites to find the most left-down and most right-up cells
+  const sortedByX = [...sites].sort((a, b) => a[0] - b[0]); // Sort by x-coordinate
+  const sortedByY = [...sites].sort((a, b) => a[1] - b[1]); // Sort by y-coordinate
 
-  while (queue.length > 0) {
-    const currentCellId = queue.shift();
+  const leftDownSite = sortedByX[0]; // Smallest x, largest y
+  const rightUpSite = sortedByX[sites.length - 1]; // Largest x, smallest y
 
-    if (visited.has(currentCellId)) continue;
-    visited.add(currentCellId);
+  // Find the corresponding cell IDs
+  const leftDownCellId = sites.findIndex(site => site[0] === leftDownSite[0] && site[1] === leftDownSite[1]);
+  const rightUpCellId = sites.findIndex(site => site[0] === rightUpSite[0] && site[1] === rightUpSite[1]);
 
-    if (cells[currentCellId].color === targetColor) {
-      sameColorCells.push(currentCellId);
-
-      const neighbors = cells[currentCellId].neighbors;
-      for (const neighborId of neighbors) {
-        if (!visited.has(neighborId)) {
-          queue.push(neighborId);
-        }
-      }
-    }
-  }
-
-  return sameColorCells;
+  return { leftDownCellId, rightUpCellId };
 };
 
 const VoronoiDiagram = ({ numPoints = 50 }) => {
   const sites = useMemo(() => generateSites(numPoints, width, height), [numPoints]);
   const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, width, height), [sites]);
   const cells = useMemo(() => createCells(sites, voronoi, delaunay), [sites, voronoi, delaunay]);
+
+  // Identify the boundary cells using sorting
+  const { leftDownCellId, rightUpCellId } = useMemo(() => findBoundaryCells(sites), [sites]);
 
   const [hoveredCell, setHoveredCell] = React.useState(null);
   const [selectedCell, setSelectedCell] = React.useState(null);
@@ -104,7 +96,16 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
           Array.isArray(hoveredCell.neighbors) &&
           (cell.id === hoveredCell.id || hoveredCell.neighbors.includes(cell.id));
 
-        const fillColor = isSelected ? "greenyellow" : isHovered ? "orange" : cell.color;
+        // Set the boundary cells to black
+        const fillColor =
+          cell.id === leftDownCellId || cell.id === rightUpCellId
+            ? "black"
+            : isSelected
+            ? "greenyellow"
+            : isHovered
+            ? "orange"
+            : cell.color;
+
         const fillStroke = isSelected ? "red" : isHovered ? "lime" : "black";
         const widthStroke = isSelected ? 0 : isHovered ? 0 : 1;
         const zIndex = isSelected ? 'z-10' : isHovered ? 'z-10' : 'z-1';
@@ -126,6 +127,34 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
       })}
     </svg>
   );
+};
+
+// Function to find all neighboring cells with the same color
+const findSameColorNeighbors = (cellId, cells) => {
+  const visited = new Set();
+  const queue = [cellId];
+  const targetColor = cells[cellId].color;
+  const sameColorCells = [];
+
+  while (queue.length > 0) {
+    const currentCellId = queue.shift();
+
+    if (visited.has(currentCellId)) continue;
+    visited.add(currentCellId);
+
+    if (cells[currentCellId].color === targetColor) {
+      sameColorCells.push(currentCellId);
+
+      const neighbors = cells[currentCellId].neighbors;
+      for (const neighborId of neighbors) {
+        if (!visited.has(neighborId)) {
+          queue.push(neighborId);
+        }
+      }
+    }
+  }
+
+  return sameColorCells;
 };
 
 export default VoronoiDiagram;
