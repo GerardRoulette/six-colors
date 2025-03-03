@@ -31,29 +31,47 @@ const createCells = (sites, voronoi, delaunay) => {
   }));
 };
 
-// Function to find the most left-down and most right-up cells using sorting
-const findBoundaryCells = (sites) => {
-  // Sort sites to find the most left-down and most right-up cells
-  const sortedByX = [...sites].sort((a, b) => a[0] - b[0]); // Sort by x-coordinate
-  const sortedByY = [...sites].sort((a, b) => a[1] - b[1]); // Sort by y-coordinate
+// Function to ensure corner cells exist and return their IDs
+const ensureCornerCells = (sites, width, height) => {
+  let leftDownCellId = null;
+  let rightUpCellId = null;
 
-  const leftDownSite = sortedByX[0]; // Smallest x, largest y
-  const rightUpSite = sortedByX[sites.length - 1]; // Largest x, smallest y
+  // Check if corner cells already exist
+  sites.forEach((site, index) => {
+    const [x, y] = site;
+    if (Math.abs(x) < 1e-6 && Math.abs(y - height) < 1e-6) {
+      leftDownCellId = index;
+    }
+    if (Math.abs(x - width) < 1e-6 && Math.abs(y) < 1e-6) {
+      rightUpCellId = index;
+    }
+  });
 
-  // Find the corresponding cell IDs
-  const leftDownCellId = sites.findIndex(site => site[0] === leftDownSite[0] && site[1] === leftDownSite[1]);
-  const rightUpCellId = sites.findIndex(site => site[0] === rightUpSite[0] && site[1] === rightUpSite[1]);
+  // If left-down corner cell does not exist, add it
+  if (leftDownCellId === null) {
+    leftDownCellId = sites.length;
+    sites.push([0, height]);
+  }
+
+  // If right-up corner cell does not exist, add it
+  if (rightUpCellId === null) {
+    rightUpCellId = sites.length;
+    sites.push([width, 0]);
+  }
+
+  console.log("Corner Cells:", { leftDownCellId, rightUpCellId }); // Debugging: Print final IDs
+  console.log("Sites:", sites); // Debugging: Print all sites
 
   return { leftDownCellId, rightUpCellId };
 };
 
 const VoronoiDiagram = ({ numPoints = 50 }) => {
-  const sites = useMemo(() => generateSites(numPoints, width, height), [numPoints]);
+  const initialSites = useMemo(() => generateSites(numPoints, width, height), [numPoints]);
+  const { leftDownCellId, rightUpCellId } = useMemo(() => ensureCornerCells(initialSites, width, height), [initialSites, width, height]);
+  const sites = useMemo(() => [...initialSites], [initialSites]);
+
   const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, width, height), [sites]);
   const cells = useMemo(() => createCells(sites, voronoi, delaunay), [sites, voronoi, delaunay]);
-
-  // Identify the boundary cells using sorting
-  const { leftDownCellId, rightUpCellId } = useMemo(() => findBoundaryCells(sites), [sites]);
 
   const [hoveredCell, setHoveredCell] = React.useState(null);
   const [selectedCell, setSelectedCell] = React.useState(null);
