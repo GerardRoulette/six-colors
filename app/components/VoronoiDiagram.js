@@ -7,9 +7,9 @@ const width = 800;
 const height = 600;
 
 const generateSites = (numPoints, width, height) => {
-  const sites = [];
+  let sites = [];
   for (let i = 0; i < numPoints; i++) {
-    sites.push([Math.random() * width, Math.random() * height]);
+    sites.push([Math.random() * width - 150, Math.random() * height - 100]);
   }
   return sites;
 };
@@ -32,42 +32,10 @@ const createCells = (sites, voronoi, delaunay) => {
 };
 
 // Function to ensure corner cells exist and return their IDs
-const ensureCornerCells = (sites, width, height) => {
-  let leftDownCellId = null;
-  let rightUpCellId = null;
 
-  // Check if corner cells already exist
-  sites.forEach((site, index) => {
-    const [x, y] = site;
-    if (Math.abs(x) < 1e-6 && Math.abs(y - height) < 1e-6) {
-      leftDownCellId = index;
-    }
-    if (Math.abs(x - width) < 1e-6 && Math.abs(y) < 1e-6) {
-      rightUpCellId = index;
-    }
-  });
-
-  // If left-down corner cell does not exist, add it
-  if (leftDownCellId === null) {
-    leftDownCellId = sites.length;
-    sites.push([0, height]);
-  }
-
-  // If right-up corner cell does not exist, add it
-  if (rightUpCellId === null) {
-    rightUpCellId = sites.length;
-    sites.push([width, 0]);
-  }
-
-  console.log("Corner Cells:", { leftDownCellId, rightUpCellId }); // Debugging: Print final IDs
-  console.log("Sites:", sites); // Debugging: Print all sites
-
-  return { leftDownCellId, rightUpCellId };
-};
 
 const VoronoiDiagram = ({ numPoints = 50 }) => {
   const initialSites = useMemo(() => generateSites(numPoints, width, height), [numPoints]);
-  const { leftDownCellId, rightUpCellId } = useMemo(() => ensureCornerCells(initialSites, width, height), [initialSites, width, height]);
   const sites = useMemo(() => [...initialSites], [initialSites]);
 
   const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, width, height), [sites]);
@@ -116,9 +84,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
 
         // Set the boundary cells to black
         const fillColor =
-          cell.id === leftDownCellId || cell.id === rightUpCellId
-            ? "black"
-            : isSelected
+            isSelected
             ? "greenyellow"
             : isHovered
             ? "orange"
