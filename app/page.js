@@ -9,7 +9,7 @@ const VoronoiDiagram = dynamic(() => import("./components/VoronoiDiagram"), {
 
 export default function Home() {
   return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "800px", width: "600px" }}>
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "800px", width: "800px" }}>
       <VoronoiDiagram numPoints={1000} />
     </div>
   );
