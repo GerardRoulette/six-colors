@@ -1,13 +1,17 @@
-"use client"; // This file runs on the client (enables hooks/event handlers)
+"use client"; 
 
-import React, { useMemo } from "react"; // React and memoization for derived data
-import { Delaunay } from "d3-delaunay"; // Delaunay/Voronoi utilities
+import React, { useMemo } from "react"; 
+import { Delaunay } from "d3-delaunay";
 
-// Fixed SVG viewport size (pixels)
-const width = 800;
-const height = 600;
+// responsive viewport (computed from window size)
+const computeSize = () => {
+  if (typeof window === 'undefined') return { w: 800, h: 600 };
+  const w = Math.max(300, Math.floor(window.innerWidth * 0.9));
+  const h = Math.max(300, Math.floor(window.innerHeight * 0.7));
+  return { w, h };
+};
 
-// Create random site points within the viewport
+// random diagram generation
 const generateSites = (numPoints, width, height) => {
   let sites = [];
   for (let i = 0; i < numPoints; i++) {
@@ -16,49 +20,57 @@ const generateSites = (numPoints, width, height) => {
   return sites;
 };
 
-// Build Delaunay triangulation and derived Voronoi diagram clipped to our viewport
+// generating the Voronoi diagram
 const generateVoronoi = (sites, width, height) => {
   const delaunay = Delaunay.from(sites);
   const voronoi = delaunay.voronoi([0, 0, width, height]);
   return { delaunay, voronoi };
 };
 
-// Convert sites into renderable cell objects with geometry, color and adjacency
+// converting sites into cell objects with needed properties
 const PALETTE = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
 const createCells = (sites, voronoi, delaunay) => {
   return sites.map((site, index) => ({
     id: index,
     site: site,
-    path: voronoi.renderCell(index), // SVG path string for this Voronoi cell
-    polygon: voronoi.cellPolygon(index), // Array of points [x,y] describing the cell polygon (closed)
-    color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
-    neighbors: Array.from(delaunay.neighbors(index)) || [], // Cell adjacency from Delaunay graph
-    owner: null, // 'player' | 'ai' | null
+    path: voronoi.renderCell(index), // svg path string for this cell
+    polygon: voronoi.cellPolygon(index), // array of points [x,y] describing the cell polygon (closed)
+    color: PALETTE[Math.floor(Math.random() * PALETTE.length)], // random color
+    neighbors: Array.from(delaunay.neighbors(index)) || [], // array of neighboring cells
+    owner: null, // owner of the cell - 'player' / 'ai' / null
   }));
 };
 
-// Find which cells contain the four viewport corners so we can treat them specially if needed
-const getCornerCellIds = (delaunay) => {
-  const topLeft = delaunay.find(0, 0);
+// finding the corner cells to use at start fiels for the game
+// double check later if we need to use topleft and bottomright corners
+const getCornerCellIds = (delaunay, width, height) => {
+  const topLeft = delaunay.find(0, 0); 
   const topRight = delaunay.find(width, 0);
-  const bottomLeft = delaunay.find(0, height);
+  const bottomLeft = delaunay.find(0, height); 
   const bottomRight = delaunay.find(width, height);
   return new Set([topLeft, topRight, bottomLeft, bottomRight]);
 };
 
 
-// Main interactive Voronoi diagram component
+// main interactive Voronoi diagram component
 const VoronoiDiagram = ({ numPoints = 50 }) => {
-  // Stable set of random sites for the given count
-  const initialSites = useMemo(() => generateSites(numPoints, width, height), [numPoints]);
+  // compute responsive size
+  const [{ w: svgWidth, h: svgHeight }, setSvgSize] = React.useState(computeSize());
+  React.useEffect(() => {
+    const onResize = () => setSvgSize(computeSize());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  // stable set of random sites for the given count
+  const initialSites = useMemo(() => generateSites(numPoints, svgWidth, svgHeight), [numPoints, svgWidth, svgHeight]);
   const sites = useMemo(() => [...initialSites], [initialSites]);
 
-  // Geometry derivations
-  const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, width, height), [sites]);
+  // geometry derivations
+  const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, svgWidth, svgHeight), [sites, svgWidth, svgHeight]);
   const baseCells = useMemo(() => createCells(sites, voronoi, delaunay), [sites, voronoi, delaunay]);
 
-  // Identify which cells contain the four corners and mark them
-  const cornerCellIds = useMemo(() => getCornerCellIds(delaunay), [delaunay]);
+  // identifying the corner cells and marking them
+  const cornerCellIds = useMemo(() => getCornerCellIds(delaunay, svgWidth, svgHeight), [delaunay, svgWidth, svgHeight]);
   const initialCellsWithCorners = useMemo(() =>
     baseCells.map((cell) =>
       cornerCellIds.has(cell.id)
@@ -67,21 +79,21 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     ),
   [baseCells, cornerCellIds]);
 
-  // Game state
+  // game state
   const [cells, setCells] = React.useState(initialCellsWithCorners);
   const [turn, setTurn] = React.useState('player'); // 'player' | 'ai'
   const [playerLastColor, setPlayerLastColor] = React.useState(null);
   const [aiLastColor, setAiLastColor] = React.useState(null);
   const [gameOver, setGameOver] = React.useState(null); // 'player' | 'ai' | null
 
-  // Determine starting cells: player bottom-left, AI top-right
+  // determining the starting cells: player bottom-left, AI top-right
   const startIds = useMemo(() => {
-    const topRight = Delaunay.from(sites).find(width, 0);
-    const bottomLeft = Delaunay.from(sites).find(0, height);
+    const topRight = Delaunay.from(sites).find(svgWidth, 0);
+    const bottomLeft = Delaunay.from(sites).find(0, svgHeight);
     return { playerStartId: bottomLeft, aiStartId: topRight };
-  }, [sites]);
+  }, [sites, svgWidth, svgHeight]);
 
-  // Initialize ownership once on mount
+  // initializing ownership once on mount
   React.useEffect(() => {
     setCells((prev) => {
       const next = prev.map((c) => ({ ...c }));
@@ -117,6 +129,23 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     return map;
   }, [cells]);
 
+  // Visual adjacency: two cells are neighbors only if they share a visible clipped edge
+  const visualNeighbors = useMemo(() => {
+    const neighborSets = new Map(); // id -> Set of neighbor ids
+    for (const cell of cells) neighborSets.set(cell.id, new Set());
+    for (const owners of edgesByKey.values()) {
+      if (owners.length === 2) {
+        const a = owners[0].cellId;
+        const b = owners[1].cellId;
+        neighborSets.get(a).add(b);
+        neighborSets.get(b).add(a);
+      }
+    }
+    const result = new Map();
+    for (const [id, set] of neighborSets.entries()) result.set(id, Array.from(set));
+    return result;
+  }, [edgesByKey, cells]);
+
   // Interaction state (hover only)
   const [hoveredCell, setHoveredCell] = React.useState(null);
 
@@ -150,7 +179,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
       const visited = new Set(queue);
       while (queue.length > 0) {
         const cid = queue.shift();
-        const nbs = next[cid].neighbors;
+        const nbs = visualNeighbors.get(cid) || [];
         for (const nb of nbs) {
           if (visited.has(nb)) continue;
           visited.add(nb);
@@ -195,7 +224,8 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
       const aiOwned = new Set(ownedIds('ai'));
       const counts = new Map();
       for (const id of aiOwned) {
-        for (const nb of cells[id].neighbors) {
+        const nbs = visualNeighbors.get(id) || [];
+        for (const nb of nbs) {
           if (aiOwned.has(nb)) continue;
           if (cells[nb].owner) continue; // cannot capture
           const c = cells[nb].color;
@@ -226,11 +256,11 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
   }, [turn, gameOver, cells]);
 
   // Detect game over: if all border cells are owned by a single side
-  const isBorderPoint = (p) => {
+  const isBorderPoint = React.useCallback((p) => {
     const [x, y] = p;
     const eps = 1e-3;
-    return x < eps || y < eps || Math.abs(x - width) < eps || Math.abs(y - height) < eps;
-  };
+    return x < eps || y < eps || Math.abs(x - svgWidth) < eps || Math.abs(y - svgHeight) < eps;
+  }, [svgWidth, svgHeight]);
   React.useEffect(() => {
     if (gameOver) return;
     const borderCellIds = cells.filter(c => (c.polygon || []).some(isBorderPoint)).map(c => c.id);
@@ -239,34 +269,52 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     const ownedByAi = borderCellIds.every(id => cells[id].owner === 'ai');
     if (ownedByPlayer) setGameOver('player');
     else if (ownedByAi) setGameOver('ai');
-  }, [cells, gameOver]);
+  }, [cells, gameOver, isBorderPoint]);
+
+  // Compute region boundary segments for each owner (only the outer outline edges)
+  const playerBoundary = useMemo(() => {
+    const ownedSet = new Set(cells.filter(c => c.owner === 'player').map(c => c.id));
+    const boundary = [];
+    for (const owners of edgesByKey.values()) {
+      const inOwned = owners.filter(o => ownedSet.has(o.cellId));
+      if (inOwned.length === 0) continue;
+      const outOwned = owners.filter(o => !ownedSet.has(o.cellId));
+      if (owners.length === 1) { boundary.push(inOwned[0]); continue; }
+      if (outOwned.length > 0 && inOwned.length > 0) boundary.push(inOwned[0]);
+    }
+    return boundary;
+  }, [cells, edgesByKey]);
+  const aiBoundary = useMemo(() => {
+    const ownedSet = new Set(cells.filter(c => c.owner === 'ai').map(c => c.id));
+    const boundary = [];
+    for (const owners of edgesByKey.values()) {
+      const inOwned = owners.filter(o => ownedSet.has(o.cellId));
+      if (inOwned.length === 0) continue;
+      const outOwned = owners.filter(o => !ownedSet.has(o.cellId));
+      if (owners.length === 1) { boundary.push(inOwned[0]); continue; }
+      if (outOwned.length > 0 && inOwned.length > 0) boundary.push(inOwned[0]);
+    }
+    return boundary;
+  }, [cells, edgesByKey]);
 
   // On hover, track for subtle styling (no recolor in game mode)
   const handleCellHover = (cell) => {
     setHoveredCell(cell);
   };
 
-  // Restore colors on hover end
+  // Clear hover on leave
   const handleMouseLeave = () => {
-    if (hoveredCell && !hoveredCell.isCorner) {
-      const sameColorCells = findSameColorNeighbors(hoveredCell.id, cells);
-      sameColorCells.forEach((cellId) => {
-        if (!cells[cellId].isCorner) {
-          cells[cellId].color = hoveredCell.color;
-        }
-      });
-    }
     setHoveredCell(null);
   };
 
   return (
-    <svg width={width} height={height}>
-      {cells.map((cell) => {
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', width: '90vw' }}>
+      <svg width={svgWidth} height={svgHeight}>
+        {cells.map((cell) => {
         // Derived flags for visual state
         const isHovered =
           hoveredCell &&
-          Array.isArray(hoveredCell.neighbors) &&
-          (cell.id === hoveredCell.id || hoveredCell.neighbors.includes(cell.id));
+          (cell.id === hoveredCell.id || (visualNeighbors.get(hoveredCell.id) || []).includes(cell.id));
 
         // Compute fill color with selection/hover priority (corner cells keep their base color)
         const fillColor =
@@ -274,50 +322,73 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
             ? "orange"
             : cell.color;
 
-        // Stroke by ownership
-        const fillStroke =
-            cell.owner === 'player' ? 'dodgerblue'
-            : cell.owner === 'ai' ? 'crimson'
-            : 'black';
-        const widthStroke = (cell.owner ? 2 : 1);
+        // Regular thin internal borders for all cells; thick outer borders are drawn as overlays
+        const fillStroke = 'black';
+        const widthStroke = 1;
         const zIndex = isHovered ? 'z-10' : 'z-1';
 
-        return (
-          <path
-            key={cell.id}
-            d={cell.path}
-            fill={fillColor}
-            filter={`url(#lightEffect${cell.id})`}
-            stroke={fillStroke}
-            strokeWidth={widthStroke}
-            onMouseEnter={() => handleCellHover(cell)}
-            onMouseLeave={handleMouseLeave}
-            onClick={() => handleCellClick(cell)}
-            className={zIndex}
-          />
-        );
-      })}
-      {/* Palette controls and status overlay */}
-      <foreignObject x="10" y="10" width="300" height="200">
-        <div xmlns="http://www.w3.org/1999/xhtml" style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(255,255,255,0.8)', padding: 8, borderRadius: 6 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            {gameOver ? (gameOver === 'player' ? 'Game over: You win!' : 'Game over: AI wins!') : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
-          </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {PALETTE.map((c) => {
-              const legal = computeLegalColors('player');
-              const disabled = turn !== 'player' || gameOver || !legal.includes(c);
-              return (
-                <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 32, height: 32, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }} />
-              );
-            })}
-          </div>
-          <div style={{ fontSize: 12, color: '#333' }}>
-            Constraints: not your previous color, not AI last color{playerLastColor === null ? ', not your starting color (first move)' : ''}.
-          </div>
+          return (
+            <path
+              key={cell.id}
+              d={cell.path}
+              fill={fillColor}
+              filter={`url(#lightEffect${cell.id})`}
+              stroke={fillStroke}
+              strokeWidth={widthStroke}
+              onMouseEnter={() => handleCellHover(cell)}
+              onMouseLeave={handleMouseLeave}
+              // clicks are handled via palette buttons in game mode
+              className={zIndex}
+            />
+          );
+        })}
+        {/* Thick outer border overlays for owned regions */}
+        {playerBoundary.length > 0 && (
+          <g pointerEvents="none">
+            {playerBoundary.map((seg, i) => (
+              <path
+                key={`p-boundary-${i}`}
+                d={`M ${seg.a[0]} ${seg.a[1]} L ${seg.b[0]} ${seg.b[1]}`}
+                fill="none"
+                stroke="dodgerblue"
+                strokeWidth={6}
+              />
+            ))}
+          </g>
+        )}
+        {aiBoundary.length > 0 && (
+          <g pointerEvents="none">
+            {aiBoundary.map((seg, i) => (
+              <path
+                key={`a-boundary-${i}`}
+                d={`M ${seg.a[0]} ${seg.a[1]} L ${seg.b[0]} ${seg.b[1]}`}
+                fill="none"
+                stroke="crimson"
+                strokeWidth={6}
+              />
+            ))}
+          </g>
+        )}
+      </svg>
+      {/* Controls below the field */}
+      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>
+          {gameOver ? (gameOver === 'player' ? 'Game over: You win!' : 'Game over: AI wins!') : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
         </div>
-      </foreignObject>
-    </svg>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {PALETTE.map((c) => {
+            const legal = computeLegalColors('player');
+            const disabled = turn !== 'player' || gameOver || !legal.includes(c);
+            return (
+              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 32, height: 32, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }} />
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 12, color: '#333' }}>
+          Constraints: not your previous color, not AI last color{playerLastColor === null ? ', not your starting color (first move)' : ''}.
+        </div>
+      </div>
+    </div>
   );
 };
 
