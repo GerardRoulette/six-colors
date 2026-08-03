@@ -51,9 +51,44 @@ const getCornerCellIds = (delaunay, width, height) => {
   return new Set([topLeft, topRight, bottomLeft, bottomRight]);
 };
 
+// Simulate a move and return how many unowned cells would be captured (matches applyMove flood fill)
+const countCapturesForMove = (cells, visualNeighbors, owner, color) => {
+  const next = cells.map((c) => ({ ...c }));
+  const owned = new Set(next.filter((c) => c.owner === owner).map((c) => c.id));
+  if (owned.size === 0) return 0;
+
+  owned.forEach((id) => { next[id].color = color; });
+
+  const queue = [...owned];
+  const visited = new Set(queue);
+  let captures = 0;
+
+  while (queue.length > 0) {
+    const cid = queue.shift();
+    const nbs = visualNeighbors.get(cid) || [];
+    for (const nb of nbs) {
+      if (visited.has(nb)) continue;
+      visited.add(nb);
+      if (next[nb].owner && next[nb].owner !== owner) continue;
+      if (next[nb].owner === owner) {
+        if (next[nb].color !== color) next[nb].color = color;
+        queue.push(nb);
+        continue;
+      }
+      if (next[nb].owner === null && next[nb].color === color) {
+        next[nb].owner = owner;
+        next[nb].color = color;
+        queue.push(nb);
+        owned.add(nb);
+        captures++;
+      }
+    }
+  }
+  return captures;
+};
 
 // main interactive Voronoi diagram component
-const VoronoiDiagram = ({ numPoints = 50 }) => {
+const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default value
   // compute responsive size
   const [{ w: svgWidth, h: svgHeight }, setSvgSize] = React.useState(computeSize());
   React.useEffect(() => {
@@ -62,7 +97,8 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   // stable set of random sites for the given count
-  const initialSites = useMemo(() => generateSites(numPoints, svgWidth, svgHeight), [numPoints, svgWidth, svgHeight]);
+  const [gameKey, setGameKey] = React.useState(0);
+  const initialSites = useMemo(() => generateSites(numPoints, svgWidth, svgHeight), [numPoints, svgWidth, svgHeight, gameKey]);
   const sites = useMemo(() => [...initialSites], [initialSites]);
 
   // geometry derivations
@@ -93,16 +129,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     return { playerStartId: bottomLeft, aiStartId: topRight };
   }, [sites, svgWidth, svgHeight]);
 
-  // initializing ownership once on mount
+  // initialize ownership when a new game starts
   React.useEffect(() => {
-    setCells((prev) => {
-      const next = prev.map((c) => ({ ...c }));
-      if (startIds.playerStartId != null) next[startIds.playerStartId].owner = 'player';
-      if (startIds.aiStartId != null) next[startIds.aiStartId].owner = 'ai';
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const next = initialCellsWithCorners.map((c) => ({ ...c }));
+    if (startIds.playerStartId != null) next[startIds.playerStartId].owner = 'player';
+    if (startIds.aiStartId != null) next[startIds.aiStartId].owner = 'ai';
+    setCells(next);
+  }, [gameKey, initialCellsWithCorners, startIds]);
 
   // Index all unique polygon edges (undirected). Used for region boundary or border checks.
   const edgesByKey = useMemo(() => {
@@ -148,6 +181,15 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
 
   // Interaction state (hover only)
   const [hoveredCell, setHoveredCell] = React.useState(null);
+
+  const handleTryAgain = () => {
+    setTurn('player');
+    setPlayerLastColor(null);
+    setAiLastColor(null);
+    setGameOver(null);
+    setHoveredCell(null);
+    setGameKey((k) => k + 1);
+  };
 
   // Utility: get owned ids for a side
   const ownedIds = (owner) => cells.filter(c => c.owner === owner).map(c => c.id);
@@ -215,29 +257,17 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     setTurn('ai');
   };
 
-  // AI chooses best color (most frequent along AI frontier) under constraints
+  // AI chooses best color (most cells captured via flood fill) under constraints
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
     const t = setTimeout(() => {
       const legal = new Set(computeLegalColors('ai'));
-      const aiOwned = new Set(ownedIds('ai'));
-      const counts = new Map();
-      for (const id of aiOwned) {
-        const nbs = visualNeighbors.get(id) || [];
-        for (const nb of nbs) {
-          if (aiOwned.has(nb)) continue;
-          if (cells[nb].owner) continue; // cannot capture
-          const c = cells[nb].color;
-          if (!legal.has(c)) continue;
-          counts.set(c, (counts.get(c) || 0) + 1);
-        }
-      }
-      // Pick the color with max count; tie-breaker: first in palette order
+      // Pick the color that captures the most cells (including same-color chains)
       let best = null; let bestCount = -1;
       for (const col of PALETTE) {
         if (!legal.has(col)) continue;
-        const cnt = counts.get(col) || 0;
+        const cnt = countCapturesForMove(cells, visualNeighbors, 'ai', col);
         if (cnt > bestCount) { best = col; bestCount = cnt; }
       }
       // If no frontier match, pick any legal color different from current to recolor
@@ -255,21 +285,21 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turn, gameOver, cells]);
 
-  // Detect game over: if all border cells are owned by a single side
-  const isBorderPoint = React.useCallback((p) => {
-    const [x, y] = p;
-    const eps = 1e-3;
-    return x < eps || y < eps || Math.abs(x - svgWidth) < eps || Math.abs(y - svgHeight) < eps;
-  }, [svgWidth, svgHeight]);
+  const controlStats = useMemo(() => {
+    const total = cells.length;
+    const playerCount = cells.filter((c) => c.owner === 'player').length;
+    const aiCount = cells.filter((c) => c.owner === 'ai').length;
+    const playerPercent = total > 0 ? Math.round((playerCount / total) * 100) : 0;
+    const aiPercent = total > 0 ? Math.round((aiCount / total) * 100) : 0;
+    return { total, playerCount, aiCount, playerPercent, aiPercent };
+  }, [cells]);
+
+  // Detect game over: if one side controls more than 50% of cells
   React.useEffect(() => {
     if (gameOver) return;
-    const borderCellIds = cells.filter(c => (c.polygon || []).some(isBorderPoint)).map(c => c.id);
-    if (borderCellIds.length === 0) return;
-    const ownedByPlayer = borderCellIds.every(id => cells[id].owner === 'player');
-    const ownedByAi = borderCellIds.every(id => cells[id].owner === 'ai');
-    if (ownedByPlayer) setGameOver('player');
-    else if (ownedByAi) setGameOver('ai');
-  }, [cells, gameOver, isBorderPoint]);
+    if (controlStats.playerPercent > 50) setGameOver('player');
+    else if (controlStats.aiPercent > 50) setGameOver('ai');
+  }, [controlStats, gameOver]);
 
   // Compute region boundary segments for each owner (only the outer outline edges)
   const playerBoundary = useMemo(() => {
@@ -309,6 +339,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
 
   return (
     <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', width: '90vw' }}>
+      <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
       <svg width={svgWidth} height={svgHeight}>
         {cells.map((cell) => {
         // Derived flags for visual state
@@ -370,10 +401,58 @@ const VoronoiDiagram = ({ numPoints = 50 }) => {
           </g>
         )}
       </svg>
+      {gameOver && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.55)',
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: 12,
+              padding: '28px 36px',
+              textAlign: 'center',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+              minWidth: 280,
+            }}
+          >
+            <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
+              {gameOver === 'player' ? 'PLAYER WINS' : 'AI WINS'}
+            </div>
+            <div style={{ fontSize: 16, lineHeight: 1.6, color: '#333', marginBottom: 20 }}>
+              <div>PLAYER controls {controlStats.playerPercent}%</div>
+              <div>AI controls {controlStats.aiPercent}%</div>
+            </div>
+            <button
+              type="button"
+              onClick={handleTryAgain}
+              style={{
+                padding: '10px 24px',
+                fontSize: 16,
+                fontWeight: 600,
+                border: 'none',
+                borderRadius: 8,
+                background: '#222',
+                color: 'white',
+                cursor: 'pointer',
+              }}
+            >
+              TRY AGAIN
+            </button>
+          </div>
+        </div>
+      )}
+      </div>
       {/* Controls below the field */}
       <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {gameOver ? (gameOver === 'player' ? 'Game over: You win!' : 'Game over: AI wins!') : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
+          {gameOver ? 'Game over' : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {PALETTE.map((c) => {
