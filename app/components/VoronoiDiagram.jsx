@@ -120,7 +120,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const [turn, setTurn] = React.useState('player'); // 'player' | 'ai'
   const [playerLastColor, setPlayerLastColor] = React.useState(null);
   const [aiLastColor, setAiLastColor] = React.useState(null);
-  const [gameOver, setGameOver] = React.useState(null); // 'player' | 'ai' | null
+  const [gameOver, setGameOver] = React.useState(null); // 'player' | 'ai' | 'tie' | null
 
   // determining the starting cells: player bottom-left, AI top-right
   const startIds = useMemo(() => {
@@ -135,6 +135,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     if (startIds.playerStartId != null) next[startIds.playerStartId].owner = 'player';
     if (startIds.aiStartId != null) next[startIds.aiStartId].owner = 'ai';
     setCells(next);
+    setGameOver(null);
   }, [gameKey, initialCellsWithCorners, startIds]);
 
   // Index all unique polygon edges (undirected). Used for region boundary or border checks.
@@ -186,7 +187,6 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setTurn('player');
     setPlayerLastColor(null);
     setAiLastColor(null);
-    setGameOver(null);
     setHoveredCell(null);
     setGameKey((k) => k + 1);
   };
@@ -294,12 +294,25 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     return { total, playerCount, aiCount, playerPercent, aiPercent };
   }, [cells]);
 
-  // Detect game over: if one side controls more than 50% of cells
+  // Detect game over: win above 50%, or 50-50 with no captures left
   React.useEffect(() => {
     if (gameOver) return;
     if (controlStats.playerPercent > 50) setGameOver('player');
     else if (controlStats.aiPercent > 50) setGameOver('ai');
-  }, [controlStats, gameOver]);
+    else if (controlStats.playerPercent === 50 && controlStats.aiPercent === 50) {
+      let anyCaptures = false;
+      for (const owner of ['player', 'ai']) {
+        for (const col of computeLegalColors(owner)) {
+          if (countCapturesForMove(cells, visualNeighbors, owner, col) > 0) {
+            anyCaptures = true;
+            break;
+          }
+        }
+        if (anyCaptures) break;
+      }
+      if (!anyCaptures) setGameOver('tie');
+    }
+  }, [controlStats, gameOver, cells, visualNeighbors, playerLastColor, aiLastColor, startIds]);
 
   // Compute region boundary segments for each owner (only the outer outline edges)
   const playerBoundary = useMemo(() => {
@@ -338,38 +351,22 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   };
 
   return (
-    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', width: '90vw' }}>
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center  ', width: '90vw' }}>
       <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
       <svg width={svgWidth} height={svgHeight}>
         {cells.map((cell) => {
-        // Derived flags for visual state
-        const isHovered =
-          hoveredCell &&
-          (cell.id === hoveredCell.id || (visualNeighbors.get(hoveredCell.id) || []).includes(cell.id));
-
-        // Compute fill color with selection/hover priority (corner cells keep their base color)
-        const fillColor =
-            isHovered
-            ? "orange"
-            : cell.color;
-
-        // Regular thin internal borders for all cells; thick outer borders are drawn as overlays
-        const fillStroke = 'black';
-        const widthStroke = 1;
-        const zIndex = isHovered ? 'z-10' : 'z-1';
+        const isHovered = hoveredCell && cell.id === hoveredCell.id;
 
           return (
             <path
               key={cell.id}
               d={cell.path}
-              fill={fillColor}
+              fill={cell.color}
               filter={`url(#lightEffect${cell.id})`}
-              stroke={fillStroke}
-              strokeWidth={widthStroke}
+              stroke="black"
+              strokeWidth={isHovered ? 3 : 1}
               onMouseEnter={() => handleCellHover(cell)}
               onMouseLeave={handleMouseLeave}
-              // clicks are handled via palette buttons in game mode
-              className={zIndex}
             />
           );
         })}
@@ -423,7 +420,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
             }}
           >
             <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
-              {gameOver === 'player' ? 'PLAYER WINS' : 'AI WINS'}
+              {gameOver === 'tie' ? 'ITS A TIE' : gameOver === 'player' ? 'PLAYER WINS' : 'AI WINS'}
             </div>
             <div style={{ fontSize: 16, lineHeight: 1.6, color: '#333', marginBottom: 20 }}>
               <div>PLAYER controls {controlStats.playerPercent}%</div>
@@ -450,16 +447,16 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
       )}
       </div>
       {/* Controls below the field */}
-      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>
+      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+        <div style={{ fontSize: 20, fontWeight: 600 }}>
           {gameOver ? 'Game over' : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {PALETTE.map((c) => {
             const legal = computeLegalColors('player');
             const disabled = turn !== 'player' || gameOver || !legal.includes(c);
             return (
-              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 32, height: 32, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }} />
+              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 64, height: 32, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }} />
             );
           })}
         </div>
