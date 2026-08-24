@@ -29,6 +29,21 @@ const generateVoronoi = (sites, width, height) => {
 
 // converting sites into cell objects with needed properties
 const PALETTE = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
+
+// AI search knobs — change these if thinking is too slow or too shallow.
+// `branch` = AI turns where EVERY legal color is tried (this is what sees 5–7 step sacrifices).
+// `tail` = extra AI turns after that, greedy only (cheap mop-up, not a sacrifice search).
+// Player replies in the simulation are always greedy (one choice), so the tree stays ~4^branch.
+const AI_SEARCH = {
+  maxMs: 80,
+  maxNodes: 12000,
+  bands: [
+    { belowPercent: 25, branch: 7, tail: 3 },
+    { belowPercent: 35, branch: 3, tail: 2 },
+    { belowPercent: 51, branch: 1, tail: 1 },,
+  ],
+};
+
 const createCells = (sites, voronoi, delaunay) => {
   return sites.map((site, index) => ({
     id: index,
@@ -51,18 +66,15 @@ const getCornerCellIds = (delaunay, width, height) => {
   return new Set([topLeft, topRight, bottomLeft, bottomRight]);
 };
 
-// Simulate a move and return how many unowned cells would be captured (matches applyMove flood fill)
-const countCapturesForMove = (cells, visualNeighbors, owner, color) => {
+// Pure flood-fill of one color choice. Returns a new board plus how many unowned cells were taken.
+const applyMoveToCells = (cells, visualNeighbors, owner, color) => {
   const next = cells.map((c) => ({ ...c }));
   const owned = new Set(next.filter((c) => c.owner === owner).map((c) => c.id));
-  if (owned.size === 0) return 0;
-
+  if (owned.size === 0) return { cells: next, captures: 0 };
   owned.forEach((id) => { next[id].color = color; });
-
   const queue = [...owned];
   const visited = new Set(queue);
   let captures = 0;
-
   while (queue.length > 0) {
     const cid = queue.shift();
     const nbs = visualNeighbors.get(cid) || [];
@@ -84,7 +96,134 @@ const countCapturesForMove = (cells, visualNeighbors, owner, color) => {
       }
     }
   }
-  return captures;
+  return { cells: next, captures };
+};
+
+// Same color bans as the live game, but works on any simulated last-colors and board.
+const getLegalColors = (owner, lastPlayer, lastAi, startIds, cells) => {
+  const lastSelf = owner === 'player' ? lastPlayer : lastAi;
+  const lastOpp = owner === 'player' ? lastAi : lastPlayer;
+  const startId = owner === 'player' ? startIds.playerStartId : startIds.aiStartId;
+  const startColor = startId != null && cells[startId] ? cells[startId].color : null;
+  const forbidden = new Set([lastSelf, lastOpp].filter(Boolean));
+  if (lastSelf === null && startColor) forbidden.add(startColor);
+  return PALETTE.filter((c) => !forbidden.has(c));
+};
+
+// Immediate capture count for a color (used by tie detection and greedy replies).
+const countCapturesForMove = (cells, visualNeighbors, owner, color) =>
+  applyMoveToCells(cells, visualNeighbors, owner, color).captures;
+
+// Apply the legal color that captures the most cells right now. Returns null if none.
+const applyGreedyMove = (cells, visualNeighbors, owner, lastPlayer, lastAi, startIds) => {
+  const legal = getLegalColors(owner, lastPlayer, lastAi, startIds, cells);
+  let best = null;
+  for (const color of legal) {
+    const move = applyMoveToCells(cells, visualNeighbors, owner, color);
+    if (!best || move.captures > best.captures) best = { ...move, color };
+  }
+  return best;
+};
+
+const searchBudgetExceeded = (budget) =>
+  budget.nodes >= budget.maxNodes || (performance.now() - budget.start) >= budget.maxMs;
+
+const planFromAiPercent = (aiPercent) =>
+  AI_SEARCH.bands.find((band) => aiPercent < band.belowPercent) || AI_SEARCH.bands[AI_SEARCH.bands.length - 1];
+
+// After an AI move: player replies greedy, then remaining AI turns (search or greedy).
+const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastAi, branchLeft, tail, budget) => {
+  if (branchLeft <= 0 && tail <= 0) return 0;
+
+  const playerMove = applyGreedyMove(board, visualNeighbors, 'player', lastPlayer, lastAi, startIds);
+  if (playerMove) {
+    board = playerMove.cells;
+    lastPlayer = playerMove.color;
+  }
+
+  const useSearch = branchLeft > 0 && !searchBudgetExceeded(budget);
+  if (useSearch) {
+    const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, board);
+    let best = 0;
+    for (const color of legal) {
+      budget.nodes += 1;
+      const move = applyMoveToCells(board, visualNeighbors, 'ai', color);
+      const rest = capturesAfterAiMove(
+        move.cells, visualNeighbors, startIds, lastPlayer, color, branchLeft - 1, tail, budget,
+      );
+      const total = move.captures + rest;
+      if (total > best) best = total;
+    }
+    return best;
+  }
+
+  const greedyTurns = (branchLeft > 0 ? branchLeft : 0) + tail;
+  let total = 0;
+  let simLastAi = lastAi;
+  for (let i = 0; i < greedyTurns; i++) {
+    const aiMove = applyGreedyMove(board, visualNeighbors, 'ai', lastPlayer, simLastAi, startIds);
+    if (!aiMove) break;
+    total += aiMove.captures;
+    board = aiMove.cells;
+    simLastAi = aiMove.color;
+    if (i === greedyTurns - 1) break;
+    const nextPlayer = applyGreedyMove(board, visualNeighbors, 'player', lastPlayer, simLastAi, startIds);
+    if (nextPlayer) {
+      board = nextPlayer.cells;
+      lastPlayer = nextPlayer.color;
+    }
+  }
+  return total;
+};
+
+// Score locking in `firstColor` now, then searching later AI color choices.
+const scoreColorLookahead = (cells, visualNeighbors, startIds, lastPlayer, lastAi, firstColor, branch, tail, budget) => {
+  const first = applyMoveToCells(cells, visualNeighbors, 'ai', firstColor);
+  return first.captures + capturesAfterAiMove(
+    first.cells, visualNeighbors, startIds, lastPlayer, firstColor, branch - 1, tail, budget,
+  );
+};
+
+// Deepen one ply at a time so a time/node cap never scores some first colors deeper than others.
+const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, lastAi, aiPercent) => {
+  const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, cells);
+  if (legal.length === 0) return null;
+  const plan = planFromAiPercent(aiPercent);
+  const startedAt = performance.now();
+  let bestColor = legal[0];
+
+  for (let depth = 1; depth <= plan.branch; depth++) {
+    if (performance.now() - startedAt >= AI_SEARCH.maxMs) break;
+    const budget = {
+      nodes: 0,
+      maxNodes: AI_SEARCH.maxNodes,
+      start: startedAt,
+      maxMs: AI_SEARCH.maxMs,
+    };
+    let iterColor = null;
+    let iterScore = -1;
+    let iterImmediate = -1;
+    let finished = true;
+    for (const color of legal) {
+      if (searchBudgetExceeded(budget)) {
+        finished = false;
+        break;
+      }
+      const score = scoreColorLookahead(
+        cells, visualNeighbors, startIds, lastPlayer, lastAi, color, depth, plan.tail, budget,
+      );
+      const immediate = countCapturesForMove(cells, visualNeighbors, 'ai', color);
+      if (score > iterScore || (score === iterScore && immediate > iterImmediate)) {
+        iterColor = color;
+        iterScore = score;
+        iterImmediate = immediate;
+      }
+    }
+    if (!finished || iterColor == null) break;
+    bestColor = iterColor;
+  }
+
+  return bestColor;
 };
 
 // main interactive Voronoi diagram component
@@ -195,56 +334,12 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const ownedIds = (owner) => cells.filter(c => c.owner === owner).map(c => c.id);
 
   // Utility: compute legal colors for a side based on constraints
-  const computeLegalColors = (owner) => {
-    const lastSelf = owner === 'player' ? playerLastColor : aiLastColor;
-    const lastOpp = owner === 'player' ? aiLastColor : playerLastColor;
-    const startId = owner === 'player' ? startIds.playerStartId : startIds.aiStartId;
-    const startColor = startId != null ? cells[startId].color : null;
-    const baseForbidden = new Set([lastSelf, lastOpp].filter(Boolean));
-    // First move cannot be the initial starting color
-    if (lastSelf === null) {
-      if (startColor) baseForbidden.add(startColor);
-    }
-    return PALETTE.filter(c => !baseForbidden.has(c));
-  };
+  const computeLegalColors = (owner) =>
+    getLegalColors(owner, playerLastColor, aiLastColor, startIds, cells);
 
   // Expand ownership for a side given a chosen color
   const applyMove = (owner, color) => {
-    setCells((prev) => {
-      const next = prev.map((c) => ({ ...c }));
-      const owned = new Set(next.filter(c => c.owner === owner).map(c => c.id));
-      if (owned.size === 0) return next;
-      // Recolor owned cells
-      owned.forEach((id) => { next[id].color = color; });
-      // Flood fill adjacent unowned cells that match the color
-      const queue = [...owned];
-      const visited = new Set(queue);
-      while (queue.length > 0) {
-        const cid = queue.shift();
-        const nbs = visualNeighbors.get(cid) || [];
-        for (const nb of nbs) {
-          if (visited.has(nb)) continue;
-          visited.add(nb);
-          // Skip opponent-owned cells (no capture)
-          if (next[nb].owner && next[nb].owner !== owner) continue;
-          if (next[nb].owner === owner) {
-            // ensure recolor propagates across own territory
-            if (next[nb].color !== color) next[nb].color = color;
-            queue.push(nb);
-            continue;
-          }
-          // Unowned cell of chosen color becomes owned
-          if (next[nb].owner === null && next[nb].color === color) {
-            next[nb].owner = owner;
-            next[nb].color = color;
-            queue.push(nb);
-            owned.add(nb);
-          }
-        }
-      }
-      return next;
-    });
-    // Update last color
+    setCells((prev) => applyMoveToCells(prev, visualNeighbors, owner, color).cells);
     if (owner === 'player') setPlayerLastColor(color); else setAiLastColor(color);
   };
 
@@ -257,25 +352,22 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setTurn('ai');
   };
 
-  // AI chooses best color (most cells captured via flood fill) under constraints
+  // AI chooses the legal color with the highest lookahead capture total
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
     const t = setTimeout(() => {
-      const legal = new Set(computeLegalColors('ai'));
-      // Pick the color that captures the most cells (including same-color chains)
-      let best = null; let bestCount = -1;
-      for (const col of PALETTE) {
-        if (!legal.has(col)) continue;
-        const cnt = countCapturesForMove(cells, visualNeighbors, 'ai', col);
-        if (cnt > bestCount) { best = col; bestCount = cnt; }
-      }
-      // If no frontier match, pick any legal color different from current to recolor
-      if (!best) {
-        for (const col of PALETTE) {
-          if (legal.has(col)) { best = col; break; }
-        }
-      }
+      const legal = computeLegalColors('ai');
+      const aiOwned = cells.filter((c) => c.owner === 'ai').length;
+      const aiPercent = cells.length > 0 ? (aiOwned / cells.length) * 100 : 0;
+      const best = pickAiColorWithSearch(
+        cells,
+        visualNeighbors,
+        startIds,
+        playerLastColor,
+        aiLastColor,
+        aiPercent,
+      ) || legal[0];
       if (best) {
         applyMove('ai', best);
       }
@@ -354,6 +446,12 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center  ', width: '90vw' }}>
       <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
       <svg width={svgWidth} height={svgHeight}>
+      
+
+
+
+
+
         {cells.map((cell) => {
         const isHovered = hoveredCell && cell.id === hoveredCell.id;
 
@@ -468,32 +566,6 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   );
 };
 
-// Breadth-first search of connected cells that share the same color
-const findSameColorNeighbors = (cellId, cells) => {
-  const visited = new Set();
-  const queue = [cellId];
-  const targetColor = cells[cellId].color;
-  const sameColorCells = [];
 
-  while (queue.length > 0) {
-    const currentCellId = queue.shift();
-
-    if (visited.has(currentCellId)) continue;
-    visited.add(currentCellId);
-
-    if (cells[currentCellId].color === targetColor) {
-      sameColorCells.push(currentCellId);
-
-      const neighbors = cells[currentCellId].neighbors;
-      for (const neighborId of neighbors) {
-        if (!visited.has(neighborId)) {
-          queue.push(neighborId);
-        }
-      }
-    }
-  }
-
-  return sameColorCells;
-};
 
 export default VoronoiDiagram;
