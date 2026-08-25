@@ -31,6 +31,8 @@ const generateVoronoi = (sites, width, height) => {
 const PALETTE = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
 
 // AI search knobs — change these if thinking is too slow or too shallow.
+// `belowPercent` is compared to occupied share: (player cells + AI cells) / all cells.
+// Example: 10% player + 12% AI → 22% occupied, so the first matching band applies.
 // `branch` = AI turns where EVERY legal color is tried (this is what sees 5–7 step sacrifices).
 // `tail` = extra AI turns after that, greedy only (cheap mop-up, not a sacrifice search).
 // Player replies in the simulation are always greedy (one choice), so the tree stays ~4^branch.
@@ -38,9 +40,14 @@ const AI_SEARCH = {
   maxMs: 80,
   maxNodes: 12000,
   bands: [
-    { belowPercent: 25, branch: 7, tail: 3 },
-    { belowPercent: 35, branch: 3, tail: 2 },
-    { belowPercent: 51, branch: 1, tail: 1 },,
+    { belowPercent: 14, branch: 7, tail: 3 },
+    { belowPercent: 28, branch: 6, tail: 3 },
+    { belowPercent: 42, branch: 5, tail: 2 },
+    { belowPercent: 56, branch: 4, tail: 2 },
+    { belowPercent: 70, branch: 3, tail: 1 },
+    { belowPercent: 84, branch: 2, tail: 1 },
+    { belowPercent: 100, branch: 1, tail: 1 },
+
   ],
 };
 
@@ -128,8 +135,8 @@ const applyGreedyMove = (cells, visualNeighbors, owner, lastPlayer, lastAi, star
 const searchBudgetExceeded = (budget) =>
   budget.nodes >= budget.maxNodes || (performance.now() - budget.start) >= budget.maxMs;
 
-const planFromAiPercent = (aiPercent) =>
-  AI_SEARCH.bands.find((band) => aiPercent < band.belowPercent) || AI_SEARCH.bands[AI_SEARCH.bands.length - 1];
+const planFromOccupiedPercent = (occupiedPercent) =>
+  AI_SEARCH.bands.find((band) => occupiedPercent < band.belowPercent) || AI_SEARCH.bands[AI_SEARCH.bands.length - 1];
 
 // After an AI move: player replies greedy, then remaining AI turns (search or greedy).
 const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastAi, branchLeft, tail, budget) => {
@@ -185,10 +192,10 @@ const scoreColorLookahead = (cells, visualNeighbors, startIds, lastPlayer, lastA
 };
 
 // Deepen one ply at a time so a time/node cap never scores some first colors deeper than others.
-const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, lastAi, aiPercent) => {
+const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, lastAi, totalPercent) => {
   const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, cells);
   if (legal.length === 0) return null;
-  const plan = planFromAiPercent(aiPercent);
+  const plan = planFromOccupiedPercent(totalPercent);
   const startedAt = performance.now();
   let bestColor = legal[0];
 
@@ -358,15 +365,17 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     // Slight delay to visualize turns
     const t = setTimeout(() => {
       const legal = computeLegalColors('ai');
-      const aiOwned = cells.filter((c) => c.owner === 'ai').length;
-      const aiPercent = cells.length > 0 ? (aiOwned / cells.length) * 100 : 0;
+     // const aiOwned = cells.filter((c) => c.owner === 'ai').length;
+    // const aiPercent = cells.length > 0 ? (aiOwned / cells.length) * 100 : 0;
+    const totalOwned = cells.filter((c) => c.owner === 'ai' || c.owner === 'player').length;
+    const totalPercent = cells.length > 0 ? (totalOwned / cells.length) * 100 : 0;
       const best = pickAiColorWithSearch(
         cells,
         visualNeighbors,
         startIds,
         playerLastColor,
         aiLastColor,
-        aiPercent,
+        totalPercent,
       ) || legal[0];
       if (best) {
         applyMove('ai', best);
