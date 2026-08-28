@@ -558,7 +558,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
         <div style={{ fontSize: 20, fontWeight: 600 }}>
           {gameOver ? 'Game over' : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
         </div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap' }}>
           {PALETTE.map((c) => { 
             const legal = computeLegalColors('player');
             const disabled = turn !== 'player' || gameOver || !legal.includes(c);
