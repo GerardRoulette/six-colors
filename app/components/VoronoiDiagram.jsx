@@ -40,12 +40,12 @@ const AI_SEARCH = {
   maxMs: 80,
   maxNodes: 12000,
   bands: [
-    { belowPercent: 14, branch: 7, tail: 3 },
-    { belowPercent: 28, branch: 6, tail: 3 },
-    { belowPercent: 42, branch: 5, tail: 2 },
-    { belowPercent: 56, branch: 4, tail: 2 },
-    { belowPercent: 70, branch: 3, tail: 1 },
-    { belowPercent: 84, branch: 2, tail: 1 },
+    { belowPercent: 30, branch: 7, tail: 3 },
+    { belowPercent: 40, branch: 6, tail: 3 },
+    { belowPercent: 45, branch: 5, tail: 2 },
+    { belowPercent: 50, branch: 4, tail: 2 },
+    { belowPercent: 60, branch: 3, tail: 1 },
+    { belowPercent: 70, branch: 2, tail: 1 },
     { belowPercent: 100, branch: 1, tail: 1 },
 
   ],
