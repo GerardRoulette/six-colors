@@ -559,11 +559,34 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
           {gameOver ? 'Game over' : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
         </div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {PALETTE.map((c) => {
+          {PALETTE.map((c) => { 
             const legal = computeLegalColors('player');
             const disabled = turn !== 'player' || gameOver || !legal.includes(c);
             return (
-              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 64, height: 32, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }} />
+              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 64, height: 64, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }}>
+
+{disabled && (
+   <svg
+   viewBox="0 0 64 32"      // Matches button dimensions exactly
+   preserveAspectRatio="none" // Forces stretch to fill the rectangle
+   style={{
+     position: 'relative',
+     top: 0,
+     left: 0,
+     width: '100%',
+     height: '100%',
+     display: 'block',
+     pointerEvents: 'none',
+   }}
+ >
+   
+   
+   {/* Pure black X (thinner, drawn on top) */}
+   <line x1="0" y1="0" x2="64" y2="32" stroke="black" strokeWidth="7" strokeLinecap="round" />
+   <line x1="64" y1="0" x2="0" y2="32" stroke="black" strokeWidth="7" strokeLinecap="round" />
+ </svg>)}
+
+              </button>
             );
           })}
         </div>
