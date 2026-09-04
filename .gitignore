@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Cursor (local AI rules; not shared with the repo)
+.cursor/
+.cursorrules

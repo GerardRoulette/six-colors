@@ -2,16 +2,52 @@
 
 import React, { useMemo } from "react"; 
 import { Delaunay } from "d3-delaunay";
+import { LanguageToggle, useTranslation } from "./LanguageSelector";
+
+// Shared look for FAQ / difficulty chrome buttons in the row above the board.
+const TOOLBAR_BUTTON_STYLE = {
+  padding: '6px 14px',
+  fontSize: 14,
+  fontWeight: 600,
+  height: 38,
+  border: '1px solid #fff',
+  borderRadius: 8,
+  background: '#000',
+  color: '#fff',
+};
+
+// Overlay actions (Try again / Close): same black fill, white border, and white label as the toolbar.
+const OVERLAY_BUTTON_STYLE = {
+  padding: '10px 24px',
+  fontSize: 16,
+  fontWeight: 600,
+  border: '1px solid #fff',
+  borderRadius: 8,
+  background: '#000',
+  color: '#fff',
+  cursor: 'pointer',
+};
+
+// Horizontal padding on Home (`padding: 16` each side). Board + palette must fit inside it.
+const PAGE_PADDING_X = 16;
+// Space between adjacent palette swatches (px).
+const PALETTE_GAP = 4;
+// Default palette button edge; shrinks on narrow screens so six swatches stay on one row.
+const PALETTE_BUTTON_MAX = 64;
 
 // responsive viewport (computed from window size)
+// Returns SVG pixel size from the window (~90% × ~70%). Width never exceeds the padded viewport so the board and color row stay on-screen. SSR fallback is 800×600 because `window` is missing.
 const computeSize = () => {
   if (typeof window === 'undefined') return { w: 800, h: 600 };
-  const w = Math.max(300, Math.floor(window.innerWidth * 0.9));
+  // Usable width inside Home's left/right padding.
+  const paddedWidth = window.innerWidth - PAGE_PADDING_X * 2;
+  const w = Math.max(1, Math.min(Math.floor(window.innerWidth * 0.9), paddedWidth));
   const h = Math.max(300, Math.floor(window.innerHeight * 0.7));
   return { w, h };
 };
 
 // random diagram generation
+// `numPoints` random [x, y] sites in the SVG rectangle; these become Voronoi cell seeds.
 const generateSites = (numPoints, width, height) => {
   let sites = [];
   for (let i = 0; i < numPoints; i++) {
@@ -21,13 +57,14 @@ const generateSites = (numPoints, width, height) => {
 };
 
 // generating the Voronoi diagram
+// Delaunay triangulation of `sites`, then a Voronoi clipped to [0, 0, width, height].
 const generateVoronoi = (sites, width, height) => {
   const delaunay = Delaunay.from(sites);
   const voronoi = delaunay.voronoi([0, 0, width, height]);
   return { delaunay, voronoi };
 };
 
-// converting sites into cell objects with needed properties
+// Six legal fill colors (CSS names). Players pick from this list; cells are initialized randomly from it.
 const PALETTE = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
 
 // AI search knobs — change these if thinking is too slow or too shallow.
@@ -44,13 +81,15 @@ const AI_SEARCH = {
     { belowPercent: 40, branch: 6, tail: 3 },
     { belowPercent: 45, branch: 5, tail: 2 },
     { belowPercent: 50, branch: 4, tail: 2 },
-    { belowPercent: 60, branch: 3, tail: 1 },
-    { belowPercent: 70, branch: 2, tail: 1 },
+    { belowPercent: 55, branch: 3, tail: 1 },
+    { belowPercent: 60, branch: 2, tail: 1 },
     { belowPercent: 100, branch: 1, tail: 1 },
 
   ],
 };
 
+// converting sites into cell objects with needed properties
+// One board cell per site: SVG path, polygon, random color, Delaunay neighbors, no owner yet.
 const createCells = (sites, voronoi, delaunay) => {
   return sites.map((site, index) => ({
     id: index,
@@ -65,6 +104,7 @@ const createCells = (sites, voronoi, delaunay) => {
 
 // finding the corner cells to use at start fiels for the game
 // double check later if we need to use topleft and bottomright corners
+// Closest sites to the four SVG corners via Delaunay.find; returned as a Set of cell ids (marked `isCorner` in the UI board).
 const getCornerCellIds = (delaunay, width, height) => {
   const topLeft = delaunay.find(0, 0); 
   const topRight = delaunay.find(width, 0);
@@ -74,13 +114,17 @@ const getCornerCellIds = (delaunay, width, height) => {
 };
 
 // Pure flood-fill of one color choice. Returns a new board plus how many unowned cells were taken.
+// Recolors already-owned cells to `color`, then BFS through `visualNeighbors` to capture unowned same-color neighbors. Does not mutate `cells`.
 const applyMoveToCells = (cells, visualNeighbors, owner, color) => {
+  // Shallow-copied board so the search/UI can keep the previous `cells` array.
   const next = cells.map((c) => ({ ...c }));
+  // Frontier of this side's territory (grows as unowned matching cells are taken).
   const owned = new Set(next.filter((c) => c.owner === owner).map((c) => c.id));
   if (owned.size === 0) return { cells: next, captures: 0 };
   owned.forEach((id) => { next[id].color = color; });
   const queue = [...owned];
   const visited = new Set(queue);
+  // Count of previously unowned cells claimed this move (not recolors of already-owned cells).
   let captures = 0;
   while (queue.length > 0) {
     const cid = queue.shift();
@@ -107,13 +151,28 @@ const applyMoveToCells = (cells, visualNeighbors, owner, color) => {
 };
 
 // Same color bans as the live game, but works on any simulated last-colors and board.
+// Illegal: last color used by this side, last color used by the opponent; at match start both starting-cell colors; on a later first move for this side, that side's starting-cell color. Returns the remaining PALETTE entries.
 const getLegalColors = (owner, lastPlayer, lastAi, startIds, cells) => {
   const lastSelf = owner === 'player' ? lastPlayer : lastAi;
   const lastOpp = owner === 'player' ? lastAi : lastPlayer;
-  const startId = owner === 'player' ? startIds.playerStartId : startIds.aiStartId;
-  const startColor = startId != null && cells[startId] ? cells[startId].color : null;
+  // Color currently on the player's bottom-left start cell (original until the player has moved).
+  const playerStartColor = startIds.playerStartId != null && cells[startIds.playerStartId]
+    ? cells[startIds.playerStartId].color
+    : null;
+  // Color currently on the AI's top-right start cell (original until the AI has moved).
+  const aiStartColor = startIds.aiStartId != null && cells[startIds.aiStartId]
+    ? cells[startIds.aiStartId].color
+    : null;
+  // This side's start-cell color, used when they have not moved yet but the opponent already has.
+  const ownStartColor = owner === 'player' ? playerStartColor : aiStartColor;
+  // Last colors already used; start-cell colors are added only before this side (or the match) has moved.
   const forbidden = new Set([lastSelf, lastOpp].filter(Boolean));
-  if (lastSelf === null && startColor) forbidden.add(startColor);
+  if (lastPlayer === null && lastAi === null) {
+    if (playerStartColor) forbidden.add(playerStartColor);
+    if (aiStartColor) forbidden.add(aiStartColor);
+  } else if (lastSelf === null && ownStartColor) {
+    forbidden.add(ownStartColor);
+  }
   return PALETTE.filter((c) => !forbidden.has(c));
 };
 
@@ -124,6 +183,7 @@ const countCapturesForMove = (cells, visualNeighbors, owner, color) =>
 // Apply the legal color that captures the most cells right now. Returns null if none.
 const applyGreedyMove = (cells, visualNeighbors, owner, lastPlayer, lastAi, startIds) => {
   const legal = getLegalColors(owner, lastPlayer, lastAi, startIds, cells);
+  // `{ cells, captures, color }` of the legal color with the most immediate captures.
   let best = null;
   for (const color of legal) {
     const move = applyMoveToCells(cells, visualNeighbors, owner, color);
@@ -132,13 +192,16 @@ const applyGreedyMove = (cells, visualNeighbors, owner, lastPlayer, lastAi, star
   return best;
 };
 
+// True when the search has hit `maxNodes` or `maxMs` since `budget.start` (so the tree should stop expanding).
 const searchBudgetExceeded = (budget) =>
   budget.nodes >= budget.maxNodes || (performance.now() - budget.start) >= budget.maxMs;
 
+// First AI_SEARCH band whose `belowPercent` is greater than current occupancy; last band if somehow none match.
 const planFromOccupiedPercent = (occupiedPercent) =>
   AI_SEARCH.bands.find((band) => occupiedPercent < band.belowPercent) || AI_SEARCH.bands[AI_SEARCH.bands.length - 1];
 
 // After an AI move: player replies greedy, then remaining AI turns (search or greedy).
+// Returns extra captures from those later AI turns (not including the first AI ply already applied by the caller).
 const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastAi, branchLeft, tail, budget) => {
   if (branchLeft <= 0 && tail <= 0) return 0;
 
@@ -148,6 +211,7 @@ const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastA
     lastPlayer = playerMove.color;
   }
 
+  // Branching search only while `branchLeft` remains and the time/node budget is not spent.
   const useSearch = branchLeft > 0 && !searchBudgetExceeded(budget);
   if (useSearch) {
     const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, board);
@@ -164,6 +228,7 @@ const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastA
     return best;
   }
 
+  // Remaining AI plies when search is skipped: leftover branch depth plus cheap `tail` mop-up.
   const greedyTurns = (branchLeft > 0 ? branchLeft : 0) + tail;
   let total = 0;
   let simLastAi = lastAi;
@@ -185,6 +250,7 @@ const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastA
 
 // Score locking in `firstColor` now, then searching later AI color choices.
 const scoreColorLookahead = (cells, visualNeighbors, startIds, lastPlayer, lastAi, firstColor, branch, tail, budget) => {
+  // Immediate AI ply for `firstColor`; later plies are scored by `capturesAfterAiMove`.
   const first = applyMoveToCells(cells, visualNeighbors, 'ai', firstColor);
   return first.captures + capturesAfterAiMove(
     first.cells, visualNeighbors, startIds, lastPlayer, firstColor, branch - 1, tail, budget,
@@ -192,6 +258,7 @@ const scoreColorLookahead = (cells, visualNeighbors, startIds, lastPlayer, lastA
 };
 
 // Deepen one ply at a time so a time/node cap never scores some first colors deeper than others.
+// Occupancy `totalPercent` selects the search band. Tie-break among equal lookahead scores: more immediate captures. Returns a PALETTE color or null.
 const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, lastAi, totalPercent) => {
   const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, cells);
   if (legal.length === 0) return null;
@@ -201,6 +268,7 @@ const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, las
 
   for (let depth = 1; depth <= plan.branch; depth++) {
     if (performance.now() - startedAt >= AI_SEARCH.maxMs) break;
+    // Fresh node counter per depth so a timeout at depth N does not keep a half-scored N+1 ranking.
     const budget = {
       nodes: 0,
       maxNodes: AI_SEARCH.maxNodes,
@@ -210,6 +278,7 @@ const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, las
     let iterColor = null;
     let iterScore = -1;
     let iterImmediate = -1;
+    // False if this depth aborted mid-palette; then we keep the previous completed depth's color.
     let finished = true;
     for (const color of legal) {
       if (searchBudgetExceeded(budget)) {
@@ -234,8 +303,13 @@ const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, las
 };
 
 // main interactive Voronoi diagram component
+// Full game: board geometry, ownership, palette turns, AI search, SVG + overlays. `numPoints` is how many Voronoi cells to generate.
 const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default value
+  // i18n: `t(key, vars)` for status, rules, and the game-over card.
+  // i18n: HUD/FAQ copy, plus locale + changeLanguage for the toolbar switcher.
+  const { t, locale, changeLanguage } = useTranslation();
   // compute responsive size
+  // SVG width/height in pixels; `setSvgSize` reruns site generation on window resize.
   const [{ w: svgWidth, h: svgHeight }, setSvgSize] = React.useState(computeSize());
   React.useEffect(() => {
     const onResize = () => setSvgSize(computeSize());
@@ -243,12 +317,15 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     return () => window.removeEventListener('resize', onResize);
   }, []);
   // stable set of random sites for the given count
+  // Incremented by Try again to rebuild sites/ownership without mutating the current arrays in place.
   const [gameKey, setGameKey] = React.useState(0);
+  // Random seeds for this match (depends on `gameKey` so Try again gets a new map).
   const initialSites = useMemo(() => generateSites(numPoints, svgWidth, svgHeight), [numPoints, svgWidth, svgHeight, gameKey]);
   const sites = useMemo(() => [...initialSites], [initialSites]);
 
   // geometry derivations
   const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, svgWidth, svgHeight), [sites, svgWidth, svgHeight]);
+  // Cells with paths/colors/neighbors, before corner flags and starting ownership.
   const baseCells = useMemo(() => createCells(sites, voronoi, delaunay), [sites, voronoi, delaunay]);
 
   // identifying the corner cells and marking them
@@ -262,11 +339,15 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   [baseCells, cornerCellIds]);
 
   // game state
+  // Live board: colors, owners, polygons. Updated by `applyMove` / new-game effect.
   const [cells, setCells] = React.useState(initialCellsWithCorners);
   const [turn, setTurn] = React.useState('player'); // 'player' | 'ai'
+  // Last color each side played; used with both starting-cell colors to ban illegal palette buttons.
   const [playerLastColor, setPlayerLastColor] = React.useState(null);
   const [aiLastColor, setAiLastColor] = React.useState(null);
   const [gameOver, setGameOver] = React.useState(null); // 'player' | 'ai' | 'tie' | null
+  // FAQ overlay visibility; independent of the match so rules can be read mid-game.
+  const [faqOpen, setFaqOpen] = React.useState(false);
 
   // determining the starting cells: player bottom-left, AI top-right
   const startIds = useMemo(() => {
@@ -277,6 +358,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
 
   // initialize ownership when a new game starts
   React.useEffect(() => {
+    // Fresh copies so we can assign starting owners without mutating memoized `initialCellsWithCorners`.
     const next = initialCellsWithCorners.map((c) => ({ ...c }));
     if (startIds.playerStartId != null) next[startIds.playerStartId].owner = 'player';
     if (startIds.aiStartId != null) next[startIds.aiStartId].owner = 'ai';
@@ -286,8 +368,10 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
 
   // Index all unique polygon edges (undirected). Used for region boundary or border checks.
   const edgesByKey = useMemo(() => {
+    // Undirected edge key → [{ cellId, a, b }, ...]. Length 1 is a map border; 2 is a shared wall.
     const map = new Map();
     const round = (n) => Math.round(n * 1000) / 1000; // stabilize floating point keys
+    // Canonical string for segment a–b so (a,b) and (b,a) share one map entry.
     const keyFor = (a, b) => {
       const k1 = `${round(a[0])},${round(a[1])}`;
       const k2 = `${round(b[0])},${round(b[1])}`;
@@ -321,6 +405,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
         neighborSets.get(b).add(a);
       }
     }
+    // Same adjacency as arrays (`id` → neighbor id list) for flood-fill `.get(cid)`.
     const result = new Map();
     for (const [id, set] of neighborSets.entries()) result.set(id, Array.from(set));
     return result;
@@ -329,6 +414,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   // Interaction state (hover only)
   const [hoveredCell, setHoveredCell] = React.useState(null);
 
+  // Reset turn/colors/hover and bump `gameKey` so geometry + starting ownership re-run as a new match.
   const handleTryAgain = () => {
     setTurn('player');
     setPlayerLastColor(null);
@@ -336,6 +422,27 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setHoveredCell(null);
     setGameKey((k) => k + 1);
   };
+
+  // Open the rules FAQ overlay (copy lives in locale files under `rules.*`).
+  const handleOpenFaq = () => {
+    setFaqOpen(true);
+  };
+
+  // Dismiss the FAQ overlay (Close button, backdrop click, or Escape).
+  const handleCloseFaq = () => {
+    setFaqOpen(false);
+  };
+
+  // Close FAQ with Escape while it is open.
+  React.useEffect(() => {
+    if (!faqOpen) return;
+    // Keyboard dismiss for the FAQ dialog (same as the Close button).
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') handleCloseFaq();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [faqOpen]);
 
   // Utility: get owned ids for a side
   const ownedIds = (owner) => cells.filter(c => c.owner === owner).map(c => c.id);
@@ -363,11 +470,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
+    // `t` is the 250ms timer id; cleared if turn/cells change before the AI fires.
     const t = setTimeout(() => {
       const legal = computeLegalColors('ai');
      // const aiOwned = cells.filter((c) => c.owner === 'ai').length;
     // const aiPercent = cells.length > 0 ? (aiOwned / cells.length) * 100 : 0;
     const totalOwned = cells.filter((c) => c.owner === 'ai' || c.owner === 'player').length;
+    // Occupancy % for `AI_SEARCH.bands` (not the HUD percents, which are each side vs all cells).
     const totalPercent = cells.length > 0 ? (totalOwned / cells.length) * 100 : 0;
       const best = pickAiColorWithSearch(
         cells,
@@ -386,10 +495,12 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turn, gameOver, cells]);
 
+  // Cell counts and rounded board-share percents for the HUD and win check.
   const controlStats = useMemo(() => {
     const total = cells.length;
     const playerCount = cells.filter((c) => c.owner === 'player').length;
     const aiCount = cells.filter((c) => c.owner === 'ai').length;
+    // Rounded share of the board; win is strictly greater than 50.
     const playerPercent = total > 0 ? Math.round((playerCount / total) * 100) : 0;
     const aiPercent = total > 0 ? Math.round((aiCount / total) * 100) : 0;
     return { total, playerCount, aiCount, playerPercent, aiPercent };
@@ -401,6 +512,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     if (controlStats.playerPercent > 50) setGameOver('player');
     else if (controlStats.aiPercent > 50) setGameOver('ai');
     else if (controlStats.playerPercent === 50 && controlStats.aiPercent === 50) {
+      // Tie only if neither side still has a legal color that would capture at least one cell.
       let anyCaptures = false;
       for (const owner of ['player', 'ai']) {
         for (const col of computeLegalColors(owner)) {
@@ -418,6 +530,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   // Compute region boundary segments for each owner (only the outer outline edges)
   const playerBoundary = useMemo(() => {
     const ownedSet = new Set(cells.filter(c => c.owner === 'player').map(c => c.id));
+    // Edge segments on the player region outline (map border or shared with a non-player cell).
     const boundary = [];
     for (const owners of edgesByKey.values()) {
       const inOwned = owners.filter(o => ownedSet.has(o.cellId));
@@ -430,6 +543,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   }, [cells, edgesByKey]);
   const aiBoundary = useMemo(() => {
     const ownedSet = new Set(cells.filter(c => c.owner === 'ai').map(c => c.id));
+    // Same outline logic as `playerBoundary`, for the crimson AI stroke.
     const boundary = [];
     for (const owners of edgesByKey.values()) {
       const inOwned = owners.filter(o => ownedSet.has(o.cellId));
@@ -451,8 +565,45 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setHoveredCell(null);
   };
 
+  // Swatch edge so PALETTE.length buttons plus gaps fit the board width, capped at PALETTE_BUTTON_MAX.
+  const paletteButtonSize = Math.min(
+    PALETTE_BUTTON_MAX,
+    Math.max(1, Math.floor((svgWidth - PALETTE_GAP * (PALETTE.length - 1)) / PALETTE.length)),
+  );
+
   return (
-    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center  ', width: '90vw' }}>
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: svgWidth,
+          marginBottom: 10,
+        }}
+      >
+        <LanguageToggle locale={locale} onChange={changeLanguage} />
+        <button
+          type="button"
+          onClick={handleOpenFaq}
+          aria-haspopup="dialog"
+          aria-expanded={faqOpen}
+          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
+        >
+          {t('button.faq')}
+        </button>
+        <button
+          type="button"
+          disabled
+          title={t('toolbar.comingSoon')}
+          aria-label={`${t('button.difficulty')} (${t('toolbar.comingSoon')})`}
+          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'not-allowed', opacity: 0.55 }}
+        >
+          {t('button.difficulty')}
+        </button>
+      </div>
       <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
       <svg width={svgWidth} height={svgHeight}>
       
@@ -462,6 +613,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
 
 
         {cells.map((cell) => {
+        // Thicker stroke while the pointer is over this cell (hover is display-only).
         const isHovered = hoveredCell && cell.id === hoveredCell.id;
 
           return (
@@ -527,43 +679,106 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
             }}
           >
             <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
-              {gameOver === 'tie' ? 'ITS A TIE' : gameOver === 'player' ? 'PLAYER WINS' : 'AI WINS'}
+              {gameOver === 'tie' ? t('gameOver.tie') : gameOver === 'player' ? t('gameOver.playerWins') : t('gameOver.aiWins')}
             </div>
             <div style={{ fontSize: 16, lineHeight: 1.6, color: '#333', marginBottom: 20 }}>
-              <div>PLAYER controls {controlStats.playerPercent}%</div>
-              <div>AI controls {controlStats.aiPercent}%</div>
+              <div>{t('stats.playerControls', { percent: controlStats.playerPercent })}</div>
+              <div>{t('stats.aiControls', { percent: controlStats.aiPercent })}</div>
             </div>
             <button
               type="button"
               onClick={handleTryAgain}
-              style={{
-                padding: '10px 24px',
-                fontSize: 16,
-                fontWeight: 600,
-                border: 'none',
-                borderRadius: 8,
-                background: '#222',
-                color: 'white',
-                cursor: 'pointer',
-              }}
+              style={OVERLAY_BUTTON_STYLE}
             >
-              TRY AGAIN
+              {t('button.tryAgain')}
+            </button>
+          </div>
+        </div>
+      )}
+      {faqOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="faq-title"
+          onClick={handleCloseFaq}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.55)',
+          }}
+        >
+          <div
+            onClick={(event) => {
+              // Clicks on the card must not count as backdrop dismiss.
+              event.stopPropagation();
+            }}
+            style={{
+              background: 'white',
+              color: '#171717',
+              borderRadius: 12,
+              padding: '28px 36px',
+              textAlign: 'left',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+              minWidth: 280,
+              maxWidth: 520,
+              maxHeight: '80vh',
+              overflow: 'auto',
+            }}
+          >
+            <div id="faq-title" style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
+              {t('rules.title')}
+            </div>
+            <div style={{ fontSize: 16, lineHeight: 1.6, color: '#333', marginBottom: 12 }}>
+              {t('rules.welcome')}
+            </div>
+            <div style={{ fontSize: 16, lineHeight: 1.6, color: '#333', marginBottom: 20 }}>
+              {t('rules.howToPlay')}
+            </div>
+            <div style={{ fontSize: 14, lineHeight: 1.6, color: '#555', marginBottom: 20 }}>
+              {t('rules.constraints')}
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseFaq}
+              style={OVERLAY_BUTTON_STYLE}
+            >
+              {t('button.close')}
             </button>
           </div>
         </div>
       )}
       </div>
       {/* Controls below the field */}
-      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
         <div style={{ fontSize: 20, fontWeight: 600 }}>
-          {gameOver ? 'Game over' : (turn === 'player' ? 'Your turn' : 'AI thinking...')}
+          {gameOver ? t('status.gameOver') : (turn === 'player' ? t('status.yourTurn') : t('status.aiThinking'))}
         </div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap' }}>
+        <div style={{ display: 'flex', gap: PALETTE_GAP, flexWrap: 'nowrap', justifyContent: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
           {PALETTE.map((c) => { 
             const legal = computeLegalColors('player');
+            // Grey + X when it is not the player's turn, the match ended, or this color is banned.
             const disabled = turn !== 'player' || gameOver || !legal.includes(c);
             return (
-              <button key={c} onClick={() => handlePlayerChooseColor(c)} disabled={disabled} style={{ width: 64, height: 64, borderRadius: 4, border: '1px solid #333', background: c, opacity: disabled ? 0.4 : 1 }}>
+              <button
+                key={c}
+                onClick={() => handlePlayerChooseColor(c)}
+                disabled={disabled}
+                style={{
+                  width: paletteButtonSize,
+                  height: paletteButtonSize,
+                  flex: '0 0 auto',
+                  padding: 0,
+                  boxSizing: 'border-box',
+                  borderRadius: 4,
+                  border: '1px solid #333',
+                  background: c,
+                  opacity: disabled ? 0.4 : 1,
+                }}
+              >
 
 {disabled && (
    <svg
@@ -589,9 +804,6 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
               </button>
             );
           })}
-        </div>
-        <div style={{ fontSize: 12, color: '#333' }}>
-          Constraints: not your previous color, not AI last color{playerLastColor === null ? ', not your starting color (first move)' : ''}.
         </div>
       </div>
     </div>
