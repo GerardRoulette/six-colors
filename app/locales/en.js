@@ -25,8 +25,12 @@ const en = {
       welcome: "Welcome to the game of Six Colours! This is a game of strategy and luck based on controlling the most cells on the board. To win, you need to control more than 50% of the cells. To do this, you need to choose a color that is not your previous color, not the AI's last color, and not either starting color (for the first move).",
       howToPlay: "How to play: pick a color from the palette (not by clicking cells). Your territory grows through neighboring unowned cells of that color. The AI then picks a color. The game continues until one side controls more than 50% of the cells, or until there are no more captures left.",
     },
-    toolbar: {
-      comingSoon: "Coming soon",
+    difficulty: {
+      title: "Difficulty",
+      easy: "Easy",
+      medium: "Medium",
+      hard: "Hard",
+      restartNotice: "Changing the difficulty starts a new game.",
     },
   };
   

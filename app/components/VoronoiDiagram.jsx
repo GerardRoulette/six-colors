@@ -3,6 +3,17 @@
 import React, { useMemo } from "react"; 
 import { Delaunay } from "d3-delaunay";
 import { LanguageToggle, useTranslation } from "./LanguageSelector";
+import { PALETTE, applyMoveToCells, getLegalColors, countCapturesForMove } from "../game/moves";
+import { pickAiColorEasy } from "../game/aiEasy";
+import { pickAiColorMedium } from "../game/aiMedium";
+import { pickAiColorHard } from "../game/aiHard";
+
+// localStorage key for the chosen AI difficulty (`easy` | `medium` | `hard`).
+const DIFFICULTY_STORAGE_KEY = 'difficulty';
+// Selectable AI levels shown in the difficulty overlay, in display order.
+const DIFFICULTIES = ['easy', 'medium', 'hard'];
+// Default and fallback when storage is missing or invalid (original lookahead AI).
+const DEFAULT_DIFFICULTY = 'hard';
 
 // Shared look for FAQ / difficulty chrome buttons in the row above the board.
 const TOOLBAR_BUTTON_STYLE = {
@@ -16,7 +27,7 @@ const TOOLBAR_BUTTON_STYLE = {
   color: '#fff',
 };
 
-// Overlay actions (Try again / Close): same black fill, white border, and white label as the toolbar.
+// Overlay actions (Try again / Close / difficulty rows): same black fill, white border, and white label as the toolbar.
 const OVERLAY_BUTTON_STYLE = {
   padding: '10px 24px',
   fontSize: 16,
@@ -64,30 +75,6 @@ const generateVoronoi = (sites, width, height) => {
   return { delaunay, voronoi };
 };
 
-// Six legal fill colors (CSS names). Players pick from this list; cells are initialized randomly from it.
-const PALETTE = ['orangered', 'goldenrod', 'khaki', 'orchid', 'yellowgreen', 'cadetblue'];
-
-// AI search knobs — change these if thinking is too slow or too shallow.
-// `belowPercent` is compared to occupied share: (player cells + AI cells) / all cells.
-// Example: 10% player + 12% AI → 22% occupied, so the first matching band applies.
-// `branch` = AI turns where EVERY legal color is tried (this is what sees 5–7 step sacrifices).
-// `tail` = extra AI turns after that, greedy only (cheap mop-up, not a sacrifice search).
-// Player replies in the simulation are always greedy (one choice), so the tree stays ~4^branch.
-const AI_SEARCH = {
-  maxMs: 80,
-  maxNodes: 12000,
-  bands: [
-    { belowPercent: 30, branch: 7, tail: 3 },
-    { belowPercent: 40, branch: 6, tail: 3 },
-    { belowPercent: 45, branch: 5, tail: 2 },
-    { belowPercent: 50, branch: 4, tail: 2 },
-    { belowPercent: 55, branch: 3, tail: 1 },
-    { belowPercent: 60, branch: 2, tail: 1 },
-    { belowPercent: 100, branch: 1, tail: 1 },
-
-  ],
-};
-
 // converting sites into cell objects with needed properties
 // One board cell per site: SVG path, polygon, random color, Delaunay neighbors, no owner yet.
 const createCells = (sites, voronoi, delaunay) => {
@@ -113,193 +100,32 @@ const getCornerCellIds = (delaunay, width, height) => {
   return new Set([topLeft, topRight, bottomLeft, bottomRight]);
 };
 
-// Pure flood-fill of one color choice. Returns a new board plus how many unowned cells were taken.
-// Recolors already-owned cells to `color`, then BFS through `visualNeighbors` to capture unowned same-color neighbors. Does not mutate `cells`.
-const applyMoveToCells = (cells, visualNeighbors, owner, color) => {
-  // Shallow-copied board so the search/UI can keep the previous `cells` array.
-  const next = cells.map((c) => ({ ...c }));
-  // Frontier of this side's territory (grows as unowned matching cells are taken).
-  const owned = new Set(next.filter((c) => c.owner === owner).map((c) => c.id));
-  if (owned.size === 0) return { cells: next, captures: 0 };
-  owned.forEach((id) => { next[id].color = color; });
-  const queue = [...owned];
-  const visited = new Set(queue);
-  // Count of previously unowned cells claimed this move (not recolors of already-owned cells).
-  let captures = 0;
-  while (queue.length > 0) {
-    const cid = queue.shift();
-    const nbs = visualNeighbors.get(cid) || [];
-    for (const nb of nbs) {
-      if (visited.has(nb)) continue;
-      visited.add(nb);
-      if (next[nb].owner && next[nb].owner !== owner) continue;
-      if (next[nb].owner === owner) {
-        if (next[nb].color !== color) next[nb].color = color;
-        queue.push(nb);
-        continue;
-      }
-      if (next[nb].owner === null && next[nb].color === color) {
-        next[nb].owner = owner;
-        next[nb].color = color;
-        queue.push(nb);
-        owned.add(nb);
-        captures++;
-      }
-    }
+// True when `value` is one of the three AI difficulty ids.
+const isValidDifficulty = (value) => DIFFICULTIES.includes(value);
+
+// Dispatch to easy (random), medium (depth 1), or hard (occupancy-banded search). Falls back to the first legal color.
+// `difficulty` is `'easy'` | `'medium'` | `'hard'`. `legal` is the live legal palette for the AI (fallback if a picker returns null).
+// `totalPercent` is occupancy for hard search bands; ignored on easy/medium. Board args match the live AI effect.
+const pickAiColorForDifficulty = (
+  difficulty,
+  cells,
+  visualNeighbors,
+  startIds,
+  lastPlayer,
+  lastAi,
+  totalPercent,
+  legal,
+) => {
+  // Chosen PALETTE color, or null if that picker found nothing legal.
+  let chosen = null;
+  if (difficulty === 'easy') {
+    chosen = pickAiColorEasy(cells, startIds, lastPlayer, lastAi);
+  } else if (difficulty === 'medium') {
+    chosen = pickAiColorMedium(cells, visualNeighbors, startIds, lastPlayer, lastAi);
+  } else {
+    chosen = pickAiColorHard(cells, visualNeighbors, startIds, lastPlayer, lastAi, totalPercent);
   }
-  return { cells: next, captures };
-};
-
-// Same color bans as the live game, but works on any simulated last-colors and board.
-// Illegal: last color used by this side, last color used by the opponent; at match start both starting-cell colors; on a later first move for this side, that side's starting-cell color. Returns the remaining PALETTE entries.
-const getLegalColors = (owner, lastPlayer, lastAi, startIds, cells) => {
-  const lastSelf = owner === 'player' ? lastPlayer : lastAi;
-  const lastOpp = owner === 'player' ? lastAi : lastPlayer;
-  // Color currently on the player's bottom-left start cell (original until the player has moved).
-  const playerStartColor = startIds.playerStartId != null && cells[startIds.playerStartId]
-    ? cells[startIds.playerStartId].color
-    : null;
-  // Color currently on the AI's top-right start cell (original until the AI has moved).
-  const aiStartColor = startIds.aiStartId != null && cells[startIds.aiStartId]
-    ? cells[startIds.aiStartId].color
-    : null;
-  // This side's start-cell color, used when they have not moved yet but the opponent already has.
-  const ownStartColor = owner === 'player' ? playerStartColor : aiStartColor;
-  // Last colors already used; start-cell colors are added only before this side (or the match) has moved.
-  const forbidden = new Set([lastSelf, lastOpp].filter(Boolean));
-  if (lastPlayer === null && lastAi === null) {
-    if (playerStartColor) forbidden.add(playerStartColor);
-    if (aiStartColor) forbidden.add(aiStartColor);
-  } else if (lastSelf === null && ownStartColor) {
-    forbidden.add(ownStartColor);
-  }
-  return PALETTE.filter((c) => !forbidden.has(c));
-};
-
-// Immediate capture count for a color (used by tie detection and greedy replies).
-const countCapturesForMove = (cells, visualNeighbors, owner, color) =>
-  applyMoveToCells(cells, visualNeighbors, owner, color).captures;
-
-// Apply the legal color that captures the most cells right now. Returns null if none.
-const applyGreedyMove = (cells, visualNeighbors, owner, lastPlayer, lastAi, startIds) => {
-  const legal = getLegalColors(owner, lastPlayer, lastAi, startIds, cells);
-  // `{ cells, captures, color }` of the legal color with the most immediate captures.
-  let best = null;
-  for (const color of legal) {
-    const move = applyMoveToCells(cells, visualNeighbors, owner, color);
-    if (!best || move.captures > best.captures) best = { ...move, color };
-  }
-  return best;
-};
-
-// True when the search has hit `maxNodes` or `maxMs` since `budget.start` (so the tree should stop expanding).
-const searchBudgetExceeded = (budget) =>
-  budget.nodes >= budget.maxNodes || (performance.now() - budget.start) >= budget.maxMs;
-
-// First AI_SEARCH band whose `belowPercent` is greater than current occupancy; last band if somehow none match.
-const planFromOccupiedPercent = (occupiedPercent) =>
-  AI_SEARCH.bands.find((band) => occupiedPercent < band.belowPercent) || AI_SEARCH.bands[AI_SEARCH.bands.length - 1];
-
-// After an AI move: player replies greedy, then remaining AI turns (search or greedy).
-// Returns extra captures from those later AI turns (not including the first AI ply already applied by the caller).
-const capturesAfterAiMove = (board, visualNeighbors, startIds, lastPlayer, lastAi, branchLeft, tail, budget) => {
-  if (branchLeft <= 0 && tail <= 0) return 0;
-
-  const playerMove = applyGreedyMove(board, visualNeighbors, 'player', lastPlayer, lastAi, startIds);
-  if (playerMove) {
-    board = playerMove.cells;
-    lastPlayer = playerMove.color;
-  }
-
-  // Branching search only while `branchLeft` remains and the time/node budget is not spent.
-  const useSearch = branchLeft > 0 && !searchBudgetExceeded(budget);
-  if (useSearch) {
-    const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, board);
-    let best = 0;
-    for (const color of legal) {
-      budget.nodes += 1;
-      const move = applyMoveToCells(board, visualNeighbors, 'ai', color);
-      const rest = capturesAfterAiMove(
-        move.cells, visualNeighbors, startIds, lastPlayer, color, branchLeft - 1, tail, budget,
-      );
-      const total = move.captures + rest;
-      if (total > best) best = total;
-    }
-    return best;
-  }
-
-  // Remaining AI plies when search is skipped: leftover branch depth plus cheap `tail` mop-up.
-  const greedyTurns = (branchLeft > 0 ? branchLeft : 0) + tail;
-  let total = 0;
-  let simLastAi = lastAi;
-  for (let i = 0; i < greedyTurns; i++) {
-    const aiMove = applyGreedyMove(board, visualNeighbors, 'ai', lastPlayer, simLastAi, startIds);
-    if (!aiMove) break;
-    total += aiMove.captures;
-    board = aiMove.cells;
-    simLastAi = aiMove.color;
-    if (i === greedyTurns - 1) break;
-    const nextPlayer = applyGreedyMove(board, visualNeighbors, 'player', lastPlayer, simLastAi, startIds);
-    if (nextPlayer) {
-      board = nextPlayer.cells;
-      lastPlayer = nextPlayer.color;
-    }
-  }
-  return total;
-};
-
-// Score locking in `firstColor` now, then searching later AI color choices.
-const scoreColorLookahead = (cells, visualNeighbors, startIds, lastPlayer, lastAi, firstColor, branch, tail, budget) => {
-  // Immediate AI ply for `firstColor`; later plies are scored by `capturesAfterAiMove`.
-  const first = applyMoveToCells(cells, visualNeighbors, 'ai', firstColor);
-  return first.captures + capturesAfterAiMove(
-    first.cells, visualNeighbors, startIds, lastPlayer, firstColor, branch - 1, tail, budget,
-  );
-};
-
-// Deepen one ply at a time so a time/node cap never scores some first colors deeper than others.
-// Occupancy `totalPercent` selects the search band. Tie-break among equal lookahead scores: more immediate captures. Returns a PALETTE color or null.
-const pickAiColorWithSearch = (cells, visualNeighbors, startIds, lastPlayer, lastAi, totalPercent) => {
-  const legal = getLegalColors('ai', lastPlayer, lastAi, startIds, cells);
-  if (legal.length === 0) return null;
-  const plan = planFromOccupiedPercent(totalPercent);
-  const startedAt = performance.now();
-  let bestColor = legal[0];
-
-  for (let depth = 1; depth <= plan.branch; depth++) {
-    if (performance.now() - startedAt >= AI_SEARCH.maxMs) break;
-    // Fresh node counter per depth so a timeout at depth N does not keep a half-scored N+1 ranking.
-    const budget = {
-      nodes: 0,
-      maxNodes: AI_SEARCH.maxNodes,
-      start: startedAt,
-      maxMs: AI_SEARCH.maxMs,
-    };
-    let iterColor = null;
-    let iterScore = -1;
-    let iterImmediate = -1;
-    // False if this depth aborted mid-palette; then we keep the previous completed depth's color.
-    let finished = true;
-    for (const color of legal) {
-      if (searchBudgetExceeded(budget)) {
-        finished = false;
-        break;
-      }
-      const score = scoreColorLookahead(
-        cells, visualNeighbors, startIds, lastPlayer, lastAi, color, depth, plan.tail, budget,
-      );
-      const immediate = countCapturesForMove(cells, visualNeighbors, 'ai', color);
-      if (score > iterScore || (score === iterScore && immediate > iterImmediate)) {
-        iterColor = color;
-        iterScore = score;
-        iterImmediate = immediate;
-      }
-    }
-    if (!finished || iterColor == null) break;
-    bestColor = iterColor;
-  }
-
-  return bestColor;
+  return chosen || legal[0];
 };
 
 // main interactive Voronoi diagram component
@@ -348,6 +174,10 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const [gameOver, setGameOver] = React.useState(null); // 'player' | 'ai' | 'tie' | null
   // FAQ overlay visibility; independent of the match so rules can be read mid-game.
   const [faqOpen, setFaqOpen] = React.useState(false);
+  // Difficulty overlay visibility; closed independently of FAQ (opening one closes the other).
+  const [difficultyOpen, setDifficultyOpen] = React.useState(false);
+  // Active AI level: `'easy'` | `'medium'` | `'hard'`. Starts as hard until localStorage is read.
+  const [difficulty, setDifficulty] = React.useState(DEFAULT_DIFFICULTY);
 
   // determining the starting cells: player bottom-left, AI top-right
   const startIds = useMemo(() => {
@@ -355,6 +185,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     const bottomLeft = Delaunay.from(sites).find(0, svgHeight);
     return { playerStartId: bottomLeft, aiStartId: topRight };
   }, [sites, svgWidth, svgHeight]);
+
+  // Restore a saved difficulty on mount; ignore unknown values so a bad key does not break the AI.
+  React.useEffect(() => {
+    // Previously chosen level, or null when the key is missing.
+    const saved = localStorage.getItem(DIFFICULTY_STORAGE_KEY);
+    if (isValidDifficulty(saved)) setDifficulty(saved);
+  }, []);
 
   // initialize ownership when a new game starts
   React.useEffect(() => {
@@ -423,8 +260,9 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setGameKey((k) => k + 1);
   };
 
-  // Open the rules FAQ overlay (copy lives in locale files under `rules.*`).
+  // Open the rules FAQ overlay (copy lives in locale files under `rules.*`). Closes difficulty if it was open.
   const handleOpenFaq = () => {
+    setDifficultyOpen(false);
     setFaqOpen(true);
   };
 
@@ -433,16 +271,40 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setFaqOpen(false);
   };
 
-  // Close FAQ with Escape while it is open.
+  // Open the Easy / Medium / Hard chooser. Closes FAQ if it was open.
+  const handleOpenDifficulty = () => {
+    setFaqOpen(false);
+    setDifficultyOpen(true);
+  };
+
+  // Dismiss the difficulty overlay (Close, backdrop, Escape, or after picking a level).
+  const handleCloseDifficulty = () => {
+    setDifficultyOpen(false);
+  };
+
+  // Persist `level`, restart the match when it differs from the current AI level, and close the overlay. `level` is `'easy'` | `'medium'` | `'hard'`.
+  const handleChooseDifficulty = (level) => {
+    if (!isValidDifficulty(level)) return;
+    // Skip a new board when the player re-selects the already active level.
+    const shouldRestart = level !== difficulty;
+    setDifficulty(level);
+    localStorage.setItem(DIFFICULTY_STORAGE_KEY, level);
+    setDifficultyOpen(false);
+    if (shouldRestart) handleTryAgain();
+  };
+
+  // Close the topmost overlay with Escape (difficulty first if both were somehow open).
   React.useEffect(() => {
-    if (!faqOpen) return;
-    // Keyboard dismiss for the FAQ dialog (same as the Close button).
+    if (!faqOpen && !difficultyOpen) return;
+    // Keyboard dismiss for FAQ or difficulty (same as each overlay's Close button).
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') handleCloseFaq();
+      if (event.key !== 'Escape') return;
+      if (difficultyOpen) handleCloseDifficulty();
+      else handleCloseFaq();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [faqOpen]);
+  }, [faqOpen, difficultyOpen]);
 
   // Utility: get owned ids for a side
   const ownedIds = (owner) => cells.filter(c => c.owner === owner).map(c => c.id);
@@ -466,26 +328,28 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setTurn('ai');
   };
 
-  // AI chooses the legal color with the highest lookahead capture total
+  // AI chooses a legal color using the selected difficulty (random / depth 1 / occupancy-banded search)
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
-    // `t` is the 250ms timer id; cleared if turn/cells change before the AI fires.
+    // `t` is the 250ms timer id; cleared if turn/cells/difficulty change before the AI fires.
     const t = setTimeout(() => {
       const legal = computeLegalColors('ai');
      // const aiOwned = cells.filter((c) => c.owner === 'ai').length;
     // const aiPercent = cells.length > 0 ? (aiOwned / cells.length) * 100 : 0;
     const totalOwned = cells.filter((c) => c.owner === 'ai' || c.owner === 'player').length;
-    // Occupancy % for `AI_SEARCH.bands` (not the HUD percents, which are each side vs all cells).
+    // Occupancy % for hard `AI_SEARCH.bands` (not the HUD percents, which are each side vs all cells).
     const totalPercent = cells.length > 0 ? (totalOwned / cells.length) * 100 : 0;
-      const best = pickAiColorWithSearch(
+      const best = pickAiColorForDifficulty(
+        difficulty,
         cells,
         visualNeighbors,
         startIds,
         playerLastColor,
         aiLastColor,
         totalPercent,
-      ) || legal[0];
+        legal,
+      );
       if (best) {
         applyMove('ai', best);
       }
@@ -493,7 +357,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turn, gameOver, cells]);
+  }, [turn, gameOver, cells, difficulty]);
 
   // Cell counts and rounded board-share percents for the HUD and win check.
   const controlStats = useMemo(() => {
@@ -596,12 +460,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
         </button>
         <button
           type="button"
-          disabled
-          title={t('toolbar.comingSoon')}
-          aria-label={`${t('button.difficulty')} (${t('toolbar.comingSoon')})`}
-          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'not-allowed', opacity: 0.55 }}
+          onClick={handleOpenDifficulty}
+          aria-haspopup="dialog"
+          aria-expanded={difficultyOpen}
+          aria-label={`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
+          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
         >
-          {t('button.difficulty')}
+          {`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
         </button>
       </div>
       <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
@@ -744,6 +609,81 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
             <button
               type="button"
               onClick={handleCloseFaq}
+              style={OVERLAY_BUTTON_STYLE}
+            >
+              {t('button.close')}
+            </button>
+          </div>
+        </div>
+      )}
+      {difficultyOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="difficulty-title"
+          aria-describedby="difficulty-restart-notice"
+          onClick={handleCloseDifficulty}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.55)',
+          }}
+        >
+          <div
+            onClick={(event) => {
+              // Clicks on the card must not count as backdrop dismiss.
+              event.stopPropagation();
+            }}
+            style={{
+              background: 'white',
+              color: '#171717',
+              borderRadius: 12,
+              padding: '28px 36px',
+              textAlign: 'left',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+              minWidth: 280,
+              maxWidth: 420,
+            }}
+          >
+            <div id="difficulty-title" style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>
+              {t('difficulty.title')}
+            </div>
+            <div
+              id="difficulty-restart-notice"
+              style={{ fontSize: 14, lineHeight: 1.5, color: '#555', marginBottom: 16 }}
+            >
+              {t('difficulty.restartNotice')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+              {DIFFICULTIES.map((level) => {
+                // Whether this row is the currently saved AI level (pressed styling + aria-pressed).
+                const active = difficulty === level;
+                return (
+                  <button
+                    key={level}
+                    type="button"
+                    onClick={() => handleChooseDifficulty(level)}
+                    aria-pressed={active}
+                    style={{
+                      ...OVERLAY_BUTTON_STYLE,
+                      width: '100%',
+                      opacity: active ? 1 : 0.7,
+                      outline: active ? '2px solid #171717' : '2px solid transparent',
+                      outlineOffset: 2,
+                    }}
+                  >
+                    {t(`difficulty.${level}`)}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseDifficulty}
               style={OVERLAY_BUTTON_STYLE}
             >
               {t('button.close')}
