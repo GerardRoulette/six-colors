@@ -1,4 +1,4 @@
-import { getLegalColors } from './moves';
+import { getLegalColors } from '../moves';
 
 // Easy difficulty: uniform random among currently legal AI colors. No capture scoring.
 export const pickAiColorEasy = (cells, startIds, lastPlayer, lastAi) => {

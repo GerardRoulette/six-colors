@@ -3,7 +3,7 @@ import {
   applyGreedyMove,
   getLegalColors,
   countCapturesForMove,
-} from './moves';
+} from '../moves';
 
 // AI search knobs — change these if thinking is too slow or too shallow.
 // `belowPercent` is compared to occupied share: (player cells + AI cells) / all cells.

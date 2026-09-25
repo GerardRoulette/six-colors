@@ -3,7 +3,7 @@ import Image from "next/image";
 import React from "react";
 import dynamic from "next/dynamic";
 
-const VoronoiDiagram = dynamic(() => import("./components/VoronoiDiagram"), {
+const VoronoiDiagram = dynamic(() => import("./components/game/VoronoiDiagram"), {
   ssr: false,
 });
 
