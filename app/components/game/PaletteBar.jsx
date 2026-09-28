@@ -4,7 +4,7 @@ import { PALETTE } from '../../game/moves';
 
 // Space between adjacent palette swatches (px).
 const PALETTE_GAP = 4;
-// Default palette button edge; shrinks on narrow screens so six swatches stay on one row.
+// Default palette button width; shrinks on narrow screens so six swatches stay on one row. Height is two thirds of this.
 const PALETTE_BUTTON_MAX = 64;
 
 // Six color swatches under the board. Illegal or out-of-turn colors are dimmed and crossed out.
@@ -12,11 +12,13 @@ const PALETTE_BUTTON_MAX = 64;
 // `interactionLocked` is true when it is not the player's turn or the match is over.
 // `onChoose` receives a palette CSS name when an enabled swatch is clicked.
 const PaletteBar = ({ svgWidth, legalColors, interactionLocked, onChoose }) => {
-  // Swatch edge so PALETTE.length buttons plus gaps fit the board width, capped at PALETTE_BUTTON_MAX.
-  const paletteButtonSize = Math.min(
+  // Swatch width so PALETTE.length buttons plus gaps fit the row, capped at PALETTE_BUTTON_MAX.
+  const paletteButtonWidth = Math.min(
     PALETTE_BUTTON_MAX,
     Math.max(1, Math.floor((svgWidth - PALETTE_GAP * (PALETTE.length - 1)) / PALETTE.length)),
   );
+  // Swatch height is two thirds of the width, so the row is shorter than a square.
+  const paletteButtonHeight = Math.max(1, Math.round(paletteButtonWidth * 2 / 3));
 
   return (
     <div style={{ display: 'flex', gap: PALETTE_GAP, flexWrap: 'nowrap', justifyContent: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
@@ -29,8 +31,8 @@ const PaletteBar = ({ svgWidth, legalColors, interactionLocked, onChoose }) => {
             onClick={() => onChoose(c)}
             disabled={disabled}
             style={{
-              width: paletteButtonSize,
-              height: paletteButtonSize,
+              width: paletteButtonWidth,
+              height: paletteButtonHeight,
               flex: '0 0 auto',
               padding: 0,
               boxSizing: 'border-box',

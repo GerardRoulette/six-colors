@@ -16,20 +16,43 @@ import BoardSvg from "./BoardSvg";
 import PaletteBar from "./PaletteBar";
 import GameOverlays from "./GameOverlays";
 
-// Horizontal padding on Home (`padding: 16` each side). Board + palette must fit inside it.
-const PAGE_PADDING_X = 16;
 // How long the mover's gems blink after a capture (ms). Three pulses of the `gem-blink` keyframe (0.28s × 3).
 const BLINK_MS = 840;
+// Long side of a new map, in SVG units. The other side keeps the slot's shape, then the map is scaled to the window.
+const BOARD_LONG_SIDE = 1000;
 
-// responsive viewport (computed from window size)
-// Returns SVG pixel size from the window (~90% × ~70%). Width never exceeds the padded viewport so the board and color row stay on-screen. SSR fallback is 800×600 because `window` is missing.
-const computeSize = () => {
-  if (typeof window === 'undefined') return { w: 800, h: 600 };
-  // Usable width inside Home's left/right padding.
-  const paddedWidth = window.innerWidth - PAGE_PADDING_X * 2;
-  const w = Math.max(1, Math.min(Math.floor(window.innerWidth * 0.9), paddedWidth));
-  const h = Math.max(300, Math.floor(window.innerHeight * 0.7));
-  return { w, h };
+// Map size for a new match. Uses the full slot between the toolbar and the palette, so a wide window gets a wide board.
+const logicalBoardSize = (slotWidth, slotHeight) => {
+  // Slot pixels. Both stay at least 1 so a zero-height first measure cannot produce an empty map.
+  const w = Math.max(1, slotWidth);
+  const h = Math.max(1, slotHeight);
+  // Scale so the long side is BOARD_LONG_SIDE. Stroke widths stay similar at every window size.
+  const scale = BOARD_LONG_SIDE / Math.max(w, h);
+  return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+};
+
+// Fit an existing map into the slot. Uniform scale, so a resize does not stretch cells or rebuild them.
+const fitBoardBox = (slotWidth, slotHeight, boardWidth, boardHeight) => {
+  // Slot size in CSS pixels. Floor so a subpixel observer tick does not refit forever.
+  const slotW = Math.max(1, Math.floor(slotWidth));
+  const slotH = Math.max(1, Math.floor(slotHeight));
+  const aspect = boardWidth / boardHeight;
+  let w = slotW;
+  let h = w / aspect;
+  if (h > slotH) {
+    h = slotH;
+    w = h * aspect;
+  }
+  return { w: Math.max(1, Math.floor(w)), h: Math.max(1, Math.floor(h)) };
+};
+
+// First-paint slot guess before ResizeObserver runs. Leaves room for the header row and the shorter palette.
+const estimateSlot = () => {
+  if (typeof window === 'undefined') return { w: 800, h: 480 };
+  return {
+    w: Math.max(1, window.innerWidth),
+    h: Math.max(1, window.innerHeight - 110),
+  };
 };
 
 // main interactive Voronoi diagram component
@@ -37,26 +60,61 @@ const computeSize = () => {
 const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default value
   // i18n: HUD/FAQ copy, plus locale + changeLanguage for the toolbar switcher.
   const { t, locale, changeLanguage } = useTranslation();
-  // SVG width/height in pixels; `setSvgSize` reruns site generation on window resize.
-  const [{ w: svgWidth, h: svgHeight }, setSvgSize] = React.useState(computeSize());
-  React.useEffect(() => {
-    const onResize = () => setSvgSize(computeSize());
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+  // Measured pixel box between the toolbar and the palette. Resize changes this, not the cells.
+  const [slotBox, setSlotBox] = React.useState(estimateSlot);
+  // SVG units for this match. Frozen after the first real measurement and replaced only on a new match.
+  const [boardBox, setBoardBox] = React.useState(() => {
+    const slot = estimateSlot();
+    return logicalBoardSize(slot.w, slot.h);
+  });
+  // True once this match has captured a map size, so later slot changes only rescale the SVG.
+  const boardFrozen = React.useRef(false);
+  // The middle row whose content box is the largest rectangle the board may occupy.
+  const slotRef = React.useRef(null);
+  React.useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    // Copy the slot's content box into state when the window, toolbar wrap, or palette height changes.
+    const apply = () => {
+      const rect = slot.getBoundingClientRect();
+      const nextW = Math.max(1, Math.floor(rect.width));
+      const nextH = Math.max(1, Math.floor(rect.height));
+      setSlotBox((prev) => (prev.w === nextW && prev.h === nextH ? prev : { w: nextW, h: nextH }));
+      // First measurement replaces the window guess before the player can move.
+      if (!boardFrozen.current && nextW > 1 && nextH > 1) {
+        boardFrozen.current = true;
+        setBoardBox(logicalBoardSize(nextW, nextH));
+      }
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(slot);
+    return () => observer.disconnect();
   }, []);
+  // On-screen board size. Cell coordinates stay in `boardBox` for the whole match.
+  const displaySize = fitBoardBox(slotBox.w, slotBox.h, boardBox.w, boardBox.h);
   // Incremented by Try again to rebuild sites/ownership without mutating the current arrays in place.
   const [gameKey, setGameKey] = React.useState(0);
-  // Random seeds for this match (depends on `gameKey` so Try again gets a new map).
-  const initialSites = useMemo(() => generateSites(numPoints, svgWidth, svgHeight), [numPoints, svgWidth, svgHeight, gameKey]);
+  // Random seeds for this match. A new `gameKey` or a new map size (new match only) draws a new board.
+  const initialSites = useMemo(
+    () => generateSites(numPoints, boardBox.w, boardBox.h),
+    [numPoints, gameKey, boardBox.w, boardBox.h],
+  );
   const sites = useMemo(() => [...initialSites], [initialSites]);
 
   // geometry derivations
-  const { delaunay, voronoi } = useMemo(() => generateVoronoi(sites, svgWidth, svgHeight), [sites, svgWidth, svgHeight]);
+  const { delaunay, voronoi } = useMemo(
+    () => generateVoronoi(sites, boardBox.w, boardBox.h),
+    [sites, boardBox.w, boardBox.h],
+  );
   // Cells with paths/colors/neighbors, before corner flags and starting ownership.
   const baseCells = useMemo(() => createCells(sites, voronoi, delaunay), [sites, voronoi, delaunay]);
 
   // identifying the corner cells and marking them
-  const cornerCellIds = useMemo(() => getCornerCellIds(delaunay, svgWidth, svgHeight), [delaunay, svgWidth, svgHeight]);
+  const cornerCellIds = useMemo(
+    () => getCornerCellIds(delaunay, boardBox.w, boardBox.h),
+    [delaunay, boardBox.w, boardBox.h],
+  );
   const initialCellsWithCorners = useMemo(() =>
     baseCells.map((cell) =>
       cornerCellIds.has(cell.id)
@@ -88,8 +146,8 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
 
   // Player bottom-left and AI top-right, from the same triangulation as the cells.
   const startIds = useMemo(
-    () => getStartIds(delaunay, svgWidth, svgHeight),
-    [delaunay, svgWidth, svgHeight],
+    () => getStartIds(delaunay, boardBox.w, boardBox.h),
+    [delaunay, boardBox.w, boardBox.h],
   );
 
   // Restore a saved difficulty on mount; ignore unknown values so a bad key does not break the AI.
@@ -131,6 +189,9 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     blinkTimers.current = { player: 0, ai: 0 };
     blinkFrames.current = { player: 0, ai: 0 };
     setBlinkSide({ player: false, ai: false });
+    // New match uses the slot as it is now. Resizes after this only scale that map.
+    boardFrozen.current = true;
+    setBoardBox(logicalBoardSize(slotBox.w, slotBox.h));
     setGameKey((k) => k + 1);
   };
 
@@ -294,45 +355,97 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
 
   // Colors the player may pick right now; the palette uses this to cross out the rest.
   const playerLegalColors = computeLegalColors('player');
+  // Turn line in the top-left header. The result text replaces it when the match is over.
+  const statusLabel = gameOver
+    ? t('status.gameOver')
+    : (turn === 'player' ? t('status.yourTurn') : t('status.aiThinking'));
+
+  // Swallow the browser context menu so a right-click or long-press on the match does not leave the game.
+  const handleBlockBrowserMenu = (event) => {
+    event.preventDefault();
+  };
 
   return (
-    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
+    <div
+      onContextMenu={handleBlockBrowserMenu}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        height: '100%',
+        width: '100%',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        padding: 8,
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
+        touchAction: 'manipulation',
+      }}
+    >
       <div
         style={{
           display: 'flex',
           flexWrap: 'wrap',
           gap: 8,
           alignItems: 'center',
-          justifyContent: 'center',
-          width: svgWidth,
-          marginBottom: 10,
+          justifyContent: 'space-between',
+          width: '100%',
+          flexShrink: 0,
+          marginBottom: 8,
         }}
       >
-        <LanguageToggle locale={locale} onChange={changeLanguage} />
-        <button
-          type="button"
-          onClick={handleOpenFaq}
-          aria-haspopup="dialog"
-          aria-expanded={faqOpen}
-          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
+        <div style={{ fontSize: 20, fontWeight: 600, textAlign: 'left', whiteSpace: 'nowrap' }}>
+          {statusLabel}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+          }}
         >
-          {t('button.faq')}
-        </button>
-        <button
-          type="button"
-          onClick={handleOpenDifficulty}
-          aria-haspopup="dialog"
-          aria-expanded={difficultyOpen}
-          aria-label={`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
-          style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
-        >
-          {`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
-        </button>
+          <LanguageToggle locale={locale} onChange={changeLanguage} />
+          <button
+            type="button"
+            onClick={handleOpenFaq}
+            aria-haspopup="dialog"
+            aria-expanded={faqOpen}
+            style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
+          >
+            {t('button.faq')}
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenDifficulty}
+            aria-haspopup="dialog"
+            aria-expanded={difficultyOpen}
+            aria-label={`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
+            style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
+          >
+            {`${t('button.difficulty')}: ${t(`difficulty.${difficulty}`)}`}
+          </button>
+        </div>
       </div>
-      <div style={{ position: 'relative', width: svgWidth, height: svgHeight }}>
+      <div
+        ref={slotRef}
+        style={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ position: 'relative', width: displaySize.w, height: displaySize.h, flexShrink: 0 }}>
         <BoardSvg
-          svgWidth={svgWidth}
-          svgHeight={svgHeight}
+          viewWidth={boardBox.w}
+          viewHeight={boardBox.h}
+          svgWidth={displaySize.w}
+          svgHeight={displaySize.h}
           cells={cells}
           hoveredCell={hoveredCell}
           blinkSide={blinkSide}
@@ -353,13 +466,11 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
           difficulty={difficulty}
           onChooseDifficulty={handleChooseDifficulty}
         />
-      </div>
-      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', width: svgWidth, maxWidth: '100%', boxSizing: 'border-box' }}>
-        <div style={{ fontSize: 20, fontWeight: 600 }}>
-          {gameOver ? t('status.gameOver') : (turn === 'player' ? t('status.yourTurn') : t('status.aiThinking'))}
         </div>
+      </div>
+      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center', width: '100%', flexShrink: 0, boxSizing: 'border-box' }}>
         <PaletteBar
-          svgWidth={svgWidth}
+          svgWidth={slotBox.w}
           legalColors={playerLegalColors}
           interactionLocked={turn !== 'player' || !!gameOver}
           onChoose={handlePlayerChooseColor}

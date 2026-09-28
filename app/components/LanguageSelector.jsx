@@ -152,7 +152,7 @@ function LanguagePrompt({ onChoose }) {
   );
 }
 
-// Compact flag buttons for switching locale. Sits in the toolbar above the board (not a corner overlay).
+// Compact flag buttons for switching locale. Sits in the top-right header with FAQ and difficulty.
 // `locale` is the active code; `onChange(lang)` persists the new locale via the provider.
 export function LanguageToggle({ locale, onChange }) {
   return (

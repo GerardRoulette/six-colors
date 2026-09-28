@@ -3,9 +3,13 @@
 import { GEM_BUCKETS } from '../../game/board/gem';
 
 // Faceted Voronoi board plus the thick territory outlines. Hover is display-only.
+// `viewWidth` / `viewHeight` are the fixed map coordinates (paths stay in this space across resizes).
+// `svgWidth` / `svgHeight` are the on-screen pixel size; the viewBox scales the map into that box.
 // `blinkSide` is `{ player, ai }`: the side that just captured pulses opacity until the blink ends. Facets stay drawn.
 // `playerBoundary` / `aiBoundary` are outline segments `{ a, b }` from `regionBoundary`.
 const BoardSvg = ({
+  viewWidth,
+  viewHeight,
   svgWidth,
   svgHeight,
   cells,
@@ -16,7 +20,12 @@ const BoardSvg = ({
   onCellHover,
   onCellLeave,
 }) => (
-  <svg width={svgWidth} height={svgHeight} style={{ background: '#1a1a1a', display: 'block' }}>
+  <svg
+    viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+    width={svgWidth}
+    height={svgHeight}
+    style={{ background: '#1a1a1a', display: 'block' }}
+  >
     {cells.map((cell) => {
       // Dark stroke while the pointer is over this cell (hover is display-only).
       const isHovered = hoveredCell && cell.id === hoveredCell.id;

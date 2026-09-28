@@ -9,7 +9,7 @@ const VoronoiDiagram = dynamic(() => import("./components/game/VoronoiDiagram"),
 
 export default function Home() {
   return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-start", minHeight: "100vh", width: "100vw", overflow: "auto", padding: 16 }}>
+    <div style={{ height: "100dvh", width: "100%", overflow: "hidden" }}>
       <VoronoiDiagram numPoints={1000} />
     </div>
   );

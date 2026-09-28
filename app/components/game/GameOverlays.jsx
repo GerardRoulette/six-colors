@@ -35,10 +35,13 @@ const GameOverlays = ({
           style={{
             background: 'white',
             borderRadius: 12,
-            padding: '28px 36px',
+            padding: '16px 20px',
             textAlign: 'center',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
-            minWidth: 280,
+            width: 'min(360px, calc(100% - 16px))',
+            maxHeight: 'calc(100% - 16px)',
+            overflow: 'auto',
+            boxSizing: 'border-box',
           }}
         >
           <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
@@ -83,13 +86,13 @@ const GameOverlays = ({
             background: 'white',
             color: '#171717',
             borderRadius: 12,
-            padding: '28px 36px',
+            padding: '16px 20px',
             textAlign: 'left',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
-            minWidth: 280,
-            maxWidth: 520,
-            maxHeight: '80vh',
+            width: 'min(520px, calc(100vw - 24px))',
+            maxHeight: 'calc(100dvh - 24px)',
             overflow: 'auto',
+            boxSizing: 'border-box',
           }}
         >
           <div id="faq-title" style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
@@ -140,11 +143,13 @@ const GameOverlays = ({
             background: 'white',
             color: '#171717',
             borderRadius: 12,
-            padding: '28px 36px',
+            padding: '16px 20px',
             textAlign: 'left',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
-            minWidth: 280,
-            maxWidth: 420,
+            width: 'min(420px, calc(100vw - 24px))',
+            maxHeight: 'calc(100dvh - 24px)',
+            overflow: 'auto',
+            boxSizing: 'border-box',
           }}
         >
           <div id="difficulty-title" style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>
