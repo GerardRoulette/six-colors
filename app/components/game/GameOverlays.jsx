@@ -156,6 +156,9 @@ const GameOverlays = ({
           >
             {t('difficulty.restartNotice')}
           </div>
+          <div style={{ fontSize: 14, lineHeight: 1.5, color: '#555', marginBottom: 16 }}>
+            {t('difficulty.superNote')}
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
             {DIFFICULTIES.map((level) => {
               // Whether this row is the currently saved AI level (pressed styling + aria-pressed).

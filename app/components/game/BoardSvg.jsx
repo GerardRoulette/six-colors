@@ -3,14 +3,14 @@
 import { GEM_BUCKETS } from '../../game/board/gem';
 
 // Faceted Voronoi board plus the thick territory outlines. Hover is display-only.
-// `flatSide` is `{ player, ai }`: the side that just captured is drawn as flat color until the hold ends.
+// `blinkSide` is `{ player, ai }`: the side that just captured pulses opacity until the blink ends. Facets stay drawn.
 // `playerBoundary` / `aiBoundary` are outline segments `{ a, b }` from `regionBoundary`.
 const BoardSvg = ({
   svgWidth,
   svgHeight,
   cells,
   hoveredCell,
-  flatSide,
+  blinkSide,
   playerBoundary,
   aiBoundary,
   onCellHover,
@@ -22,8 +22,8 @@ const BoardSvg = ({
       const isHovered = hoveredCell && cell.id === hoveredCell.id;
       // Peak and facet triangles. Missing bevel falls back to the raw Voronoi path.
       const bevel = cell.bevel;
-      // True only for tiles owned by the side that just moved; everyone else keeps the gem facets.
-      const sideFlat = cell.owner != null && flatSide[cell.owner];
+      // True only for tiles owned by the side that just moved; those pulse, everyone else stays steady.
+      const sideBlink = cell.owner != null && blinkSide[cell.owner];
       // Fills for this tile's color, one per facet brightness. Missing for an unknown color.
       const buckets = GEM_BUCKETS[cell.color];
       if (!bevel) {
@@ -32,15 +32,21 @@ const BoardSvg = ({
             key={cell.id}
             d={cell.path}
             fill={cell.color}
+            className={sideBlink ? 'gem-blink' : undefined}
             onMouseEnter={() => onCellHover(cell)}
             onMouseLeave={onCellLeave}
           />
         );
       }
       return (
-        <g key={cell.id} onMouseEnter={() => onCellHover(cell)} onMouseLeave={onCellLeave}>
+        <g
+          key={cell.id}
+          className={sideBlink ? 'gem-blink' : undefined}
+          onMouseEnter={() => onCellHover(cell)}
+          onMouseLeave={onCellLeave}
+        >
           <path d={bevel.outerPath} fill={cell.color} />
-          {!sideFlat && buckets && bevel.buckets.map((d, i) => d && (
+          {buckets && bevel.buckets.map((d, i) => d && (
             <path
               key={i}
               d={d}

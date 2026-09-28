@@ -18,8 +18,8 @@ import GameOverlays from "./GameOverlays";
 
 // Horizontal padding on Home (`padding: 16` each side). Board + palette must fit inside it.
 const PAGE_PADDING_X = 16;
-// How long that side's tiles stay flat after its capture before the facet comes back (ms).
-const FLAT_HOLD_MS = 1600;
+// How long the mover's gems blink after a capture (ms). Three pulses of the `gem-blink` keyframe (0.28s × 3).
+const BLINK_MS = 840;
 
 // responsive viewport (computed from window size)
 // Returns SVG pixel size from the window (~90% × ~70%). Width never exceeds the padded viewport so the board and color row stay on-screen. SSR fallback is 800×600 because `window` is missing.
@@ -77,12 +77,14 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const [faqOpen, setFaqOpen] = React.useState(false);
   // Difficulty overlay visibility; closed independently of FAQ (opening one closes the other).
   const [difficultyOpen, setDifficultyOpen] = React.useState(false);
-  // Active AI level: `'easy'` | `'medium'` | `'hard'`. Starts as hard until localStorage is read.
+  // Active AI level: `'easy'` | `'medium'` | `'hard'` | `'superHard'`. Starts as easy until localStorage is read.
   const [difficulty, setDifficulty] = React.useState(DEFAULT_DIFFICULTY);
-  // Which side is drawn as flat color after its own capture. The other side, and unowned cells, stay faceted.
-  const [flatSide, setFlatSide] = React.useState({ player: false, ai: false });
-  // Per-side timeout ids, so the opponent's move does not raise this side before `FLAT_HOLD_MS`.
-  const flatTimers = React.useRef({ player: 0, ai: 0 });
+  // Which side's gems are blinking after its capture. The other side, and unowned cells, stay steady and faceted.
+  const [blinkSide, setBlinkSide] = React.useState({ player: false, ai: false });
+  // Per-side timeout ids, so one side's blink ending does not stop the other's.
+  const blinkTimers = React.useRef({ player: 0, ai: 0 });
+  // Per-side animation-frame ids. A restart drops the blink class for one frame so the CSS animation can begin again.
+  const blinkFrames = React.useRef({ player: 0, ai: 0 });
 
   // Player bottom-left and AI top-right, from the same triangulation as the cells.
   const startIds = useMemo(
@@ -122,10 +124,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setPlayerLastColor(null);
     setAiLastColor(null);
     setHoveredCell(null);
-    window.clearTimeout(flatTimers.current.player);
-    window.clearTimeout(flatTimers.current.ai);
-    flatTimers.current = { player: 0, ai: 0 };
-    setFlatSide({ player: false, ai: false });
+    window.clearTimeout(blinkTimers.current.player);
+    window.clearTimeout(blinkTimers.current.ai);
+    window.cancelAnimationFrame(blinkFrames.current.player);
+    window.cancelAnimationFrame(blinkFrames.current.ai);
+    blinkTimers.current = { player: 0, ai: 0 };
+    blinkFrames.current = { player: 0, ai: 0 };
+    setBlinkSide({ player: false, ai: false });
     setGameKey((k) => k + 1);
   };
 
@@ -151,7 +156,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setDifficultyOpen(false);
   };
 
-  // Persist `level`, restart the match when it differs from the current AI level, and close the overlay. `level` is `'easy'` | `'medium'` | `'hard'`.
+  // Persist `level`, restart the match when it differs from the current AI level, and close the overlay. `level` is one of `DIFFICULTIES`.
   const handleChooseDifficulty = (level) => {
     if (!isValidDifficulty(level)) return;
     // Skip a new board when the player re-selects the already active level.
@@ -183,11 +188,16 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const applyMove = (owner, color) => {
     setCells((prev) => applyMoveToCells(prev, visualNeighbors, owner, color).cells);
     if (owner === 'player') setPlayerLastColor(color); else setAiLastColor(color);
-    setFlatSide((prev) => ({ ...prev, [owner]: true }));
-    window.clearTimeout(flatTimers.current[owner]);
-    flatTimers.current[owner] = window.setTimeout(() => {
-      setFlatSide((prev) => ({ ...prev, [owner]: false }));
-    }, FLAT_HOLD_MS);
+    window.clearTimeout(blinkTimers.current[owner]);
+    window.cancelAnimationFrame(blinkFrames.current[owner]);
+    // Drop the class first so a second move by the same side restarts the pulse instead of leaving a finished animation.
+    setBlinkSide((prev) => ({ ...prev, [owner]: false }));
+    blinkFrames.current[owner] = window.requestAnimationFrame(() => {
+      setBlinkSide((prev) => ({ ...prev, [owner]: true }));
+      blinkTimers.current[owner] = window.setTimeout(() => {
+        setBlinkSide((prev) => ({ ...prev, [owner]: false }));
+      }, BLINK_MS);
+    });
   };
 
   // Player clicks a color button
@@ -199,7 +209,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setTurn('ai');
   };
 
-  // AI chooses a legal color using the selected difficulty (random / depth 1 / occupancy-banded search)
+  // AI chooses a legal color using the selected difficulty (random / depth 1 / occupancy-banded search / Monte Carlo)
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
@@ -325,7 +335,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
           svgHeight={svgHeight}
           cells={cells}
           hoveredCell={hoveredCell}
-          flatSide={flatSide}
+          blinkSide={blinkSide}
           playerBoundary={playerBoundary}
           aiBoundary={aiBoundary}
           onCellHover={handleCellHover}

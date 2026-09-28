@@ -30,6 +30,8 @@ const en = {
       easy: "Easy",
       medium: "Medium",
       hard: "Hard",
+      superHard: "Expert",
+      superNote: "Expert is experimental. The AI thinks longer and uses a Monte Carlo tree search.",
       restartNotice: "Changing the difficulty starts a new game.",
     },
   };
