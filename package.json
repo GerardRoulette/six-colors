@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "dev:yandex": "NEXT_PUBLIC_PLATFORM=yandex next dev --turbopack",
     "build": "next build",
+    "build:yandex": "NEXT_PUBLIC_PLATFORM=yandex next build && node scripts/relativize-yandex-export.js",
     "start": "next start",
     "lint": "next lint"
   },

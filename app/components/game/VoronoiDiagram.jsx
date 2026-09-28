@@ -11,6 +11,8 @@ import {
   isValidDifficulty,
   pickAiColorForDifficulty,
 } from "../../game/ai/difficulty";
+import { IS_YANDEX } from "../../platform/isYandex";
+import { platform } from "../../platform/platform";
 import { TOOLBAR_BUTTON_STYLE } from "./chromeStyles";
 import BoardSvg from "./BoardSvg";
 import PaletteBar from "./PaletteBar";
@@ -61,7 +63,9 @@ const estimateSlot = () => {
 // Full game: board geometry, ownership, palette turns, AI search, SVG + overlays. `numPoints` is how many Voronoi cells to generate.
 const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default value
   // i18n: HUD/FAQ copy, plus locale + changeLanguage for the toolbar switcher.
-  const { t, locale, changeLanguage } = useTranslation();
+  const { t, locale, changeLanguage, ready } = useTranslation();
+  // True while a Yandex startup ad, fullscreen ad, or tab switch has paused the match.
+  const [platformPaused, setPlatformPaused] = React.useState(false);
   // Measured pixel box between the toolbar and the palette. Resize changes this, not the cells.
   const [slotBox, setSlotBox] = React.useState(estimateSlot);
   // SVG units for this match. Frozen after the first real measurement and replaced only on a new match.
@@ -362,6 +366,30 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     }
   }, [controlStats, gameOver, cells, visualNeighbors, playerLastColor, aiLastColor, startIds]);
 
+  // Yandex pause/resume (startup ad, result ad, leaving the tab). The website adapter never calls this.
+  React.useEffect(() => platform.subscribePause(setPlatformPaused), []);
+
+  // Game Ready once the shell language is applied and this match is mounted.
+  React.useEffect(() => {
+    if (!ready) return;
+    platform.signalReady();
+  }, [ready]);
+
+  // Gameplay marker: on during a live match, off for the result card, FAQ, difficulty, or a platform pause.
+  React.useEffect(() => {
+    if (!ready) return;
+    if (gameOver || faqOpen || difficultyOpen || platformPaused) platform.gameplayStop();
+    else platform.gameplayStart();
+  }, [ready, gameOver, faqOpen, difficultyOpen, platformPaused]);
+
+  // One fullscreen ad per finished match, on the result card. `seenResultKey` is the `gameKey` already offered.
+  const seenResultKey = React.useRef(null);
+  React.useEffect(() => {
+    if (!gameOver || seenResultKey.current === gameKey) return;
+    seenResultKey.current = gameKey;
+    platform.showResultAd();
+  }, [gameOver, gameKey]);
+
   // Compute region boundary segments for each owner (only the outer outline edges)
   const playerBoundary = useMemo(
     () => regionBoundary(cells, edgesByKey, 'player'),
@@ -393,6 +421,9 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const handleBlockBrowserMenu = (event) => {
     event.preventDefault();
   };
+
+  // Yandex waits until the shell language is applied so Game Ready is not sent in the wrong locale.
+  if (IS_YANDEX && !ready) return null;
 
   return (
     <div

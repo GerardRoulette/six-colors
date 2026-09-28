@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { LanguageProvider } from "./components/LanguageSelector";
 
@@ -23,6 +24,9 @@ export default function RootLayout({ children }) {
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {process.env.NEXT_PUBLIC_PLATFORM === "yandex" ? (
+          <Script src="/sdk.js" strategy="beforeInteractive" />
+        ) : null}
         <LanguageProvider>
           {children}
         </LanguageProvider>

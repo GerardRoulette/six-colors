@@ -4,6 +4,8 @@ import React, { createContext, useState, useContext, useEffect, useCallback } fr
 // Nested copy dictionaries keyed by locale code; `t()` looks up strings here.
 import en from '../locales/en';
 import ru from '../locales/ru';
+import { IS_YANDEX } from '../platform/isYandex';
+import { platform } from '../platform/platform';
 
 // Map of locale code → dictionary. Used by lookup, the prompt, and the toggle.
 const translations = { en, ru };
@@ -38,8 +40,19 @@ export function LanguageProvider({ children }) {
   // True when there is no saved locale: show the bilingual chooser instead of the toggle.
   const [needsChoice, setNeedsChoice] = useState(false);
 
-  // On mount: restore a valid saved locale, or ask the user to pick one.
+  // On mount: Yandex takes the shell language and skips the chooser. The website restores localStorage or asks.
   useEffect(() => {
+    if (IS_YANDEX) {
+      // `result` is `{ lang }` from the SDK, or null when the SDK is missing.
+      platform.boot((result) => {
+        // Supported locale from the shell. Unsupported codes stay on the English default.
+        const lang = result && result.lang;
+        if (lang && translations[lang]) setLocale(lang);
+        setNeedsChoice(false);
+        setReady(true);
+      });
+      return;
+    }
     // Previously chosen locale code, or null on first visit / invalid storage.
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && translations[saved]) {
