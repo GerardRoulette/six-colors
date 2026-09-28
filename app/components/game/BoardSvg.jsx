@@ -5,7 +5,7 @@ import { GEM_BUCKETS, GEM_FLASH_BUCKETS } from '../../game/board/gem';
 // Faceted Voronoi board plus the thick territory outlines. Hover is display-only.
 // `viewWidth` / `viewHeight` are the fixed map coordinates (paths stay in this space across resizes).
 // `svgWidth` / `svgHeight` are the on-screen pixel size; the viewBox scales the map into that box.
-// `blinkSide` is `{ player, ai }`: the side that just captured swaps in lighter opaque facets while `blinkBright` is set.
+// `blinkBright` is `{ player, ai }`: that side's gems use lighter opaque facets while its own flash is on the bright half.
 // `playerBoundary` / `aiBoundary` are outline segments `{ a, b }` from `regionBoundary`.
 const BoardSvg = ({
   viewWidth,
@@ -14,7 +14,6 @@ const BoardSvg = ({
   svgHeight,
   cells,
   hoveredCell,
-  blinkSide,
   blinkBright,
   playerBoundary,
   aiBoundary,
@@ -32,10 +31,10 @@ const BoardSvg = ({
       const isHovered = hoveredCell && cell.id === hoveredCell.id;
       // Peak and facet triangles. Missing bevel falls back to the raw Voronoi path.
       const bevel = cell.bevel;
-      // True only for tiles owned by the side that just moved; those flash lighter, everyone else stays steady.
-      const sideBlink = cell.owner != null && blinkSide[cell.owner];
+      // True on the bright half of this tile's owner's own flash. The other side keeps its own clock.
+      const sideBlink = cell.owner != null && blinkBright[cell.owner];
       // Fills for this tile's color, one per facet brightness. The lighter set is still fully opaque. Missing for an unknown color.
-      const buckets = (sideBlink && blinkBright) ? GEM_FLASH_BUCKETS[cell.color] : GEM_BUCKETS[cell.color];
+      const buckets = sideBlink ? GEM_FLASH_BUCKETS[cell.color] : GEM_BUCKETS[cell.color];
       if (!bevel) {
         return (
           <path

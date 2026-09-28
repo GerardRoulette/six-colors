@@ -18,10 +18,10 @@ import BoardSvg from "./BoardSvg";
 import PaletteBar from "./PaletteBar";
 import GameOverlays from "./GameOverlays";
 
-// Length of one bright or dim half of the blink (ms).
+// Bright flashes each side plays after its own move. The other side's clock does not change this count.
+const BLINK_FLASHES = 3;
+// Length of the bright half and the dim half (ms).
 const BLINK_HALF_MS = 140;
-// How long the mover's gems flash after a capture (ms). Three bright/dim pairs.
-const BLINK_MS = BLINK_HALF_MS * 6;
 // Long side of a new map, in SVG units. The other side keeps the slot's shape, then the map is scaled to the window.
 const BOARD_LONG_SIDE = 1000;
 
@@ -143,16 +143,10 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const [difficultyOpen, setDifficultyOpen] = React.useState(false);
   // Active AI level: `'easy'` | `'medium'` | `'hard'` | `'superHard'`. Starts as easy until localStorage is read.
   const [difficulty, setDifficulty] = React.useState(DEFAULT_DIFFICULTY);
-  // Which side's gems are flashing after its capture. The other side, and unowned cells, stay on their normal shades.
-  const [blinkSide, setBlinkSide] = React.useState({ player: false, ai: false });
-  // Lit half of the pulse. Facet fills swap to a lighter opaque set; nothing is faded.
-  const [blinkBright, setBlinkBright] = React.useState(false);
-  // Per-side timeout ids, so one side's flash ending does not stop the other's.
+  // Per side, true on the bright half of that side's own flash. Player and AI keep separate clocks.
+  const [blinkBright, setBlinkBright] = React.useState({ player: false, ai: false });
+  // Per-side interval ids. Clearing one does not stop the other.
   const blinkTimers = React.useRef({ player: 0, ai: 0 });
-  // Interval id for the shared bright/dim flip. 0 when no side is flashing.
-  const blinkPulse = React.useRef(0);
-  // Mirror of `blinkSide`, so a timeout can see the other side without waiting on a re-render.
-  const blinkSideRef = React.useRef({ player: false, ai: false });
 
   // Player bottom-left and AI top-right, from the same triangulation as the cells.
   const startIds = useMemo(
@@ -192,14 +186,10 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setPlayerLastColor(null);
     setAiLastColor(null);
     setHoveredCell(null);
-    window.clearTimeout(blinkTimers.current.player);
-    window.clearTimeout(blinkTimers.current.ai);
-    window.clearInterval(blinkPulse.current);
+    window.clearInterval(blinkTimers.current.player);
+    window.clearInterval(blinkTimers.current.ai);
     blinkTimers.current = { player: 0, ai: 0 };
-    blinkPulse.current = 0;
-    blinkSideRef.current = { player: false, ai: false };
-    setBlinkSide({ player: false, ai: false });
-    setBlinkBright(false);
+    setBlinkBright({ player: false, ai: false });
     // New match uses the slot as it is now. Resizes after this only scale that map.
     boardFrozen.current = true;
     setBoardBox(logicalBoardSize(slotBox.w, slotBox.h));
@@ -256,42 +246,29 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const computeLegalColors = (owner) =>
     getLegalColors(owner, playerLastColor, aiLastColor, startIds, cells);
 
-  // Start the shared bright/dim clock if a flash is not already running.
-  const startBlinkPulse = () => {
-    if (blinkPulse.current) return;
-    setBlinkBright(true);
-    blinkPulse.current = window.setInterval(() => {
-      // `on` is whether the lighter shades are showing; each tick swaps that half.
-      setBlinkBright((on) => !on);
+  // Play `BLINK_FLASHES` bright pulses for `owner` (`'player'` | `'ai'`), then restore that side's normal shades.
+  const startOwnerBlink = (owner) => {
+    window.clearInterval(blinkTimers.current[owner]);
+    // Half-steps this side's clock has taken. The last one forces the dim shade and stops.
+    let steps = 0;
+    setBlinkBright((prev) => ({ ...prev, [owner]: true }));
+    blinkTimers.current[owner] = window.setInterval(() => {
+      steps += 1;
+      if (steps >= BLINK_FLASHES * 2 - 1) {
+        window.clearInterval(blinkTimers.current[owner]);
+        blinkTimers.current[owner] = 0;
+        setBlinkBright((prev) => ({ ...prev, [owner]: false }));
+        return;
+      }
+      setBlinkBright((prev) => ({ ...prev, [owner]: !prev[owner] }));
     }, BLINK_HALF_MS);
-  };
-
-  // Stop the clock and leave every gem on its normal shade.
-  const stopBlinkPulse = () => {
-    window.clearInterval(blinkPulse.current);
-    blinkPulse.current = 0;
-    setBlinkBright(false);
-  };
-
-  // Mark `owner` (`'player'` | `'ai'`) as flashing or finished, and keep the pulse clock in step.
-  const setOwnerBlink = (owner, on) => {
-    // Next flashing flags, including the other side's current value.
-    const next = { ...blinkSideRef.current, [owner]: on };
-    blinkSideRef.current = next;
-    setBlinkSide(next);
-    if (on) startBlinkPulse();
-    else if (!next.player && !next.ai) stopBlinkPulse();
   };
 
   // Expand ownership for a side given a chosen color
   const applyMove = (owner, color) => {
     setCells((prev) => applyMoveToCells(prev, visualNeighbors, owner, color).cells);
     if (owner === 'player') setPlayerLastColor(color); else setAiLastColor(color);
-    window.clearTimeout(blinkTimers.current[owner]);
-    setOwnerBlink(owner, true);
-    blinkTimers.current[owner] = window.setTimeout(() => {
-      setOwnerBlink(owner, false);
-    }, BLINK_MS);
+    startOwnerBlink(owner);
   };
 
   // Player clicks a color button
@@ -508,7 +485,6 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
           svgHeight={displaySize.h}
           cells={cells}
           hoveredCell={hoveredCell}
-          blinkSide={blinkSide}
           blinkBright={blinkBright}
           playerBoundary={playerBoundary}
           aiBoundary={aiBoundary}
