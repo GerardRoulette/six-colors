@@ -32,6 +32,15 @@ export const GEM_BUCKETS = Object.fromEntries(
     GEM_STEPS.map((amount) => shadeRgb(rgb, amount)),
   ]),
 );
+// How much closer to white each facet steps during a blink. Capped so the hue does not wash out.
+const FLASH_LIFT = 0.4;
+// Opaque lighter fills for the blink, in the same bucket order as `GEM_BUCKETS`. No alpha, so the tile cannot composite to black.
+export const GEM_FLASH_BUCKETS = Object.fromEntries(
+  Object.entries(PALETTE_RGB).map(([name, rgb]) => [
+    name,
+    GEM_STEPS.map((amount) => shadeRgb(rgb, Math.min(0.75, amount + FLASH_LIFT))),
+  ]),
+);
 
 // Average of a ring. Used as the gem's peak before it is nudged toward the light.
 const ringCentroid = (ring) => {

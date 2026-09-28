@@ -1,11 +1,11 @@
 'use client';
 
-import { GEM_BUCKETS } from '../../game/board/gem';
+import { GEM_BUCKETS, GEM_FLASH_BUCKETS } from '../../game/board/gem';
 
 // Faceted Voronoi board plus the thick territory outlines. Hover is display-only.
 // `viewWidth` / `viewHeight` are the fixed map coordinates (paths stay in this space across resizes).
 // `svgWidth` / `svgHeight` are the on-screen pixel size; the viewBox scales the map into that box.
-// `blinkSide` is `{ player, ai }`: the side that just captured pulses opacity until the blink ends. Facets stay drawn.
+// `blinkSide` is `{ player, ai }`: the side that just captured swaps in lighter opaque facets while `blinkBright` is set.
 // `playerBoundary` / `aiBoundary` are outline segments `{ a, b }` from `regionBoundary`.
 const BoardSvg = ({
   viewWidth,
@@ -15,6 +15,7 @@ const BoardSvg = ({
   cells,
   hoveredCell,
   blinkSide,
+  blinkBright,
   playerBoundary,
   aiBoundary,
   onCellHover,
@@ -31,17 +32,16 @@ const BoardSvg = ({
       const isHovered = hoveredCell && cell.id === hoveredCell.id;
       // Peak and facet triangles. Missing bevel falls back to the raw Voronoi path.
       const bevel = cell.bevel;
-      // True only for tiles owned by the side that just moved; those pulse, everyone else stays steady.
+      // True only for tiles owned by the side that just moved; those flash lighter, everyone else stays steady.
       const sideBlink = cell.owner != null && blinkSide[cell.owner];
-      // Fills for this tile's color, one per facet brightness. Missing for an unknown color.
-      const buckets = GEM_BUCKETS[cell.color];
+      // Fills for this tile's color, one per facet brightness. The lighter set is still fully opaque. Missing for an unknown color.
+      const buckets = (sideBlink && blinkBright) ? GEM_FLASH_BUCKETS[cell.color] : GEM_BUCKETS[cell.color];
       if (!bevel) {
         return (
           <path
             key={cell.id}
             d={cell.path}
             fill={cell.color}
-            className={sideBlink ? 'gem-blink' : undefined}
             onMouseEnter={() => onCellHover(cell)}
             onMouseLeave={onCellLeave}
           />
@@ -50,7 +50,6 @@ const BoardSvg = ({
       return (
         <g
           key={cell.id}
-          className={sideBlink ? 'gem-blink' : undefined}
           onMouseEnter={() => onCellHover(cell)}
           onMouseLeave={onCellLeave}
         >
