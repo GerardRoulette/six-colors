@@ -11,6 +11,7 @@ const ru = {
     button: {
       tryAgain: "Попробуйте еще раз",
       faq: "FAQ",
+      restart: "Заново",
       difficulty: "Сложность",
       close: "Закрыть",
     },

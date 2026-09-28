@@ -1,4 +1,4 @@
-// Shared look for FAQ / difficulty chrome buttons in the row above the board.
+// Shared look for FAQ, restart, and difficulty chrome buttons in the row above the board.
 export const TOOLBAR_BUTTON_STYLE = {
   padding: '6px 14px',
   fontSize: 14,

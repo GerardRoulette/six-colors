@@ -11,6 +11,7 @@ const en = {
     button: {
       tryAgain: "Try again",
       faq: "FAQ",
+      restart: "Restart",
       difficulty: "Difficulty",
       close: "Close",
     },

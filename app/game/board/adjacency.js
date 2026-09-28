@@ -47,17 +47,38 @@ export const buildVisualNeighbors = (cells, edgesByKey) => {
 };
 
 // Outer outline segments of one side's territory (map border, or a wall shared with a cell that side does not own).
-// `owner` is `'player'` or `'ai'`. Segments are `{ a, b }` point pairs for the SVG stroke.
+// `owner` is `'player'` or `'ai'`. Segments are `{ a, b, cellId, shared }` for the SVG stroke.
+// `shared` is true when the other cell belongs to the opponent, so each color can take its own half of that wall.
 export const regionBoundary = (cells, edgesByKey, owner) => {
-  const ownedSet = new Set(cells.filter((c) => c.owner === owner).map((c) => c.id));
+  // Live owner of each cell id, so a wall can be marked as player-versus-AI.
+  const ownerById = new Map(cells.map((c) => [c.id, c.owner]));
   // Edge segments on this region's outline.
   const boundary = [];
   for (const owners of edgesByKey.values()) {
-    const inOwned = owners.filter((o) => ownedSet.has(o.cellId));
+    const inOwned = owners.filter((o) => ownerById.get(o.cellId) === owner);
     if (inOwned.length === 0) continue;
-    const outOwned = owners.filter((o) => !ownedSet.has(o.cellId));
-    if (owners.length === 1) { boundary.push(inOwned[0]); continue; }
-    if (outOwned.length > 0 && inOwned.length > 0) boundary.push(inOwned[0]);
+    const outOwned = owners.filter((o) => ownerById.get(o.cellId) !== owner);
+    if (owners.length === 1) {
+      boundary.push({ ...inOwned[0], shared: false });
+      continue;
+    }
+    if (outOwned.length > 0 && inOwned.length > 0) {
+      const other = ownerById.get(outOwned[0].cellId);
+      boundary.push({ ...inOwned[0], shared: other === 'player' || other === 'ai' });
+    }
   }
   return boundary;
+};
+
+// Shift a segment into the owning cell. Voronoi rings are counterclockwise, so the interior is left of a → b.
+// `distance` is the shift in map units. The original points stay put; the stroke uses the returned copy.
+export const offsetSegmentTowardOwner = (seg, distance) => {
+  const dx = seg.b[0] - seg.a[0];
+  const dy = seg.b[1] - seg.a[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return seg;
+  // Unit step to the left of a → b, scaled by `distance`.
+  const ox = (-dy / len) * distance;
+  const oy = (dx / len) * distance;
+  return { ...seg, a: [seg.a[0] + ox, seg.a[1] + oy], b: [seg.b[0] + ox, seg.b[1] + oy] };
 };

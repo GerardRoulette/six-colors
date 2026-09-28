@@ -18,8 +18,8 @@ import BoardSvg from "./BoardSvg";
 import PaletteBar from "./PaletteBar";
 import GameOverlays from "./GameOverlays";
 
-// Bright flashes each side plays after its own move. The other side's clock does not change this count.
-const BLINK_FLASHES = 3;
+// One bright flash each side plays after its own move. The other side's clock does not change this.
+const BLINK_FLASHES = 1;
 // Length of the bright half and the dim half (ms).
 const BLINK_HALF_MS = 140;
 // Long side of a new map, in SVG units. The other side keeps the slot's shape, then the map is scaled to the window.
@@ -181,6 +181,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
   const [hoveredCell, setHoveredCell] = React.useState(null);
 
   // Reset turn/colors/hover and bump `gameKey` so geometry + starting ownership re-run as a new match.
+  // Shared by the result card and the toolbar Restart button; both stay on this page.
   const handleTryAgain = () => {
     setTurn('player');
     setPlayerLastColor(null);
@@ -280,7 +281,7 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
     setTurn('ai');
   };
 
-  // AI chooses a legal color using the selected difficulty (random / depth 1 / occupancy-banded search / Monte Carlo)
+  // AI chooses a legal color using the selected difficulty (random capture / depth 1 / occupancy-banded search / Monte Carlo)
   React.useEffect(() => {
     if (turn !== 'ai' || gameOver) return;
     // Slight delay to visualize turns
@@ -453,6 +454,13 @@ const VoronoiDiagram = ({ numPoints = 50 }) => { // 50 just to have some default
             style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
           >
             {t('button.faq')}
+          </button>
+          <button
+            type="button"
+            onClick={handleTryAgain}
+            style={{ ...TOOLBAR_BUTTON_STYLE, cursor: 'pointer' }}
+          >
+            {t('button.restart')}
           </button>
           <button
             type="button"
