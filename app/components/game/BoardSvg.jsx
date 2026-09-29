@@ -5,6 +5,8 @@ import { offsetSegmentTowardOwner } from '../../game/board/adjacency';
 
 // Territory outline thickness in map units. Thin so the gem facets stay readable.
 const TERRITORY_STROKE_WIDTH = 2;
+// Combined acid thickness where player and AI share a wall, in map units. Each side paints half.
+const SHARED_STROKE_WIDTH = 6;
 // Player outline: bright acid light blue, so the border stays visible on every gem.
 const PLAYER_BOUNDARY_STROKE = '#4DFFF6';
 // AI outline: bright acid light red, the same contrast job on the opposite territory.
@@ -14,23 +16,23 @@ const TERRITORY_RIM_PX = 1;
 
 // Acid territory stroke with a 1px black rim. The bloom sits behind the rim; the sharp core is painted last.
 // `segments` are `{ a, b, shared }` outline pieces. `outlineWidth` is the black stroke in map units (acid width plus the rim).
-// A shared wall keeps the same total thickness: this side paints only its half, so the two colors meet instead of stacking.
+// A shared wall is `SHARED_STROKE_WIDTH` across: this side paints only its half, so the two colors meet instead of stacking.
 const TerritoryOutline = ({ segments, color, keyPrefix, outlineWidth }) => {
   if (!segments.length) return null;
   // 1px black rim in map units, taken from the full black stroke minus the acid core.
   const rim = (outlineWidth - TERRITORY_STROKE_WIDTH) / 2;
-  // This side's half of a shared wall. Same width as half the normal acid stroke.
-  const half = TERRITORY_STROKE_WIDTH / 2;
+  // This side's half of a shared wall, in map units.
+  const sharedHalf = SHARED_STROKE_WIDTH / 2;
   // Walls against empty cells or the map edge. These stay centered on the edge.
   const outerSegs = segments.filter((seg) => !seg.shared);
-  // Acid half, centered a quarter-stroke into this cell so it fills only this side of the wall.
+  // Acid half, centered a quarter of the shared thickness into this cell so it fills only this side of the wall.
   const sharedCore = [];
   // Black rim on the outer side of that half only, so no black stripe sits between the two colors.
   const sharedRim = [];
   for (const seg of segments) {
     if (!seg.shared) continue;
-    sharedCore.push(offsetSegmentTowardOwner(seg, half / 2));
-    sharedRim.push(offsetSegmentTowardOwner(seg, half + rim / 2));
+    sharedCore.push(offsetSegmentTowardOwner(seg, sharedHalf / 2));
+    sharedRim.push(offsetSegmentTowardOwner(seg, sharedHalf + rim / 2));
   }
   // One copy of `list`. `stroke` and `width` are that copy's paint; `tag` keeps keys unique.
   const strokes = (list, stroke, width, tag) => list.map((seg, i) => (
@@ -53,7 +55,7 @@ const TerritoryOutline = ({ segments, color, keyPrefix, outlineWidth }) => {
       {strokes(outerSegs, '#000', outlineWidth, 'rim')}
       {strokes(sharedRim, '#000', rim, 'shared-rim')}
       {strokes(outerSegs, color, TERRITORY_STROKE_WIDTH, 'core')}
-      {strokes(sharedCore, color, half, 'shared-core')}
+      {strokes(sharedCore, color, sharedHalf, 'shared-core')}
     </g>
   );
 };
